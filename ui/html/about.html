@@ -1,0 +1,379 @@
+<div class="container-fluid py-4">
+  <div class="row">
+    <div class="col-12">
+      <div class="mb-5">
+        <h1 class="display-4 fw-bold mb-2">
+          <i class="fas fa-align-center alignfix-icon me-3"></i>
+          AlignFix
+        </h1>
+        <p class="lead text-muted border-start border-secondary border-4 ps-3">
+          <b>A Tool for Analysis and Refinement of Parallel Corpora</b>
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <div class="row">
+    <!-- Main Content -->
+    <div class="col-lg-8">
+      <!-- Overview Section -->
+      <section class="mb-5">
+        <h2 class="border-bottom pb-2 mb-3">
+          <i class="fas fa-info-circle text-primary me-2"></i>
+          Overview
+        </h2>
+        <p>
+          <strong>AlignFix</strong> is a sophisticated browser-based application for processing parallel text corpora, 
+          computing word alignments, and extracting high-quality phrase pairs for machine translation and linguistic research.
+        </p>
+        <p>
+          Built entirely with WebAssembly (WASM) and running 100% in your browser, AlignFix provides desktop-class 
+          performance without requiring any server infrastructure or data uploads. Your data stays completely private 
+          and secure on your local machine.
+        </p>
+        <div class="alert alert-info border-start border-info border-4">
+          <i class="fas fa-lightbulb me-2"></i>
+          <strong>Key Philosophy:</strong> Privacy-first, offline-capable, and blazingly fast through WebAssembly compilation.
+        </div>
+      </section>
+
+      <!-- Features Section -->
+      <section class="mb-5">
+        <h2 class="border-bottom pb-2 mb-3">
+          <i class="fas fa-star text-primary me-2"></i>
+          Key Features
+        </h2>
+        
+        <div class="row">
+          <div class="col-md-6">
+            <h3 class="h5 mt-3 mb-2">
+              <i class="fas fa-align-justify text-primary me-2"></i>
+              Word Alignment
+            </h3>
+            <ul>
+              <li><strong>FastAlign</strong> implementation compiled to WASM</li>
+              <li>Bidirectional alignment (forward + reverse)</li>
+              <li>Symmetrization strategies (intersection, union, grow-diag)</li>
+              <li>Quality scoring with agreement, stability, and asymmetry metrics</li>
+              <li>Interactive visualization of alignment points</li>
+            </ul>
+
+            <h3 class="h5 mt-4 mb-2">
+              <i class="fas fa-chart-bar text-primary me-2"></i>
+              Quality Analysis
+            </h3>
+            <ul>
+              <li>Comprehensive alignment quality metrics</li>
+              <li>Interactive histograms and distributions</li>
+              <li>Filtering by confidence, agreement, and coverage</li>
+              <li>Export quality reports to CSV</li>
+              <li>Real-time statistics and visualizations</li>
+            </ul>
+          </div>
+
+          <div class="col-md-6">
+            <h3 class="h5 mt-3 mb-2">
+              <i class="fas fa-language text-primary me-2"></i>
+              Phrase Extraction
+            </h3>
+            <ul>
+              <li>Parallel phrase pair extraction from aligned corpora</li>
+              <li>Multi-threaded processing using Web Workers</li>
+              <li>Configurable phrase length (1-7 words)</li>
+              <li>Frequency filtering and quality thresholds</li>
+              <li>Batch processing for large corpora (1M+ sentences)</li>
+            </ul>
+
+            <h3 class="h5 mt-4 mb-2">
+              <i class="fas fa-database text-primary me-2"></i>
+              Project Management
+            </h3>
+            <ul>
+              <li>SQLite database stored in browser (IndexedDB)</li>
+              <li>Multiple project support with isolation</li>
+              <li>Persistent storage across sessions</li>
+              <li>Import/export projects and phrase tables</li>
+              <li>Efficient memory management for large datasets</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- Technology Stack Section -->
+      <section class="mb-5">
+        <h2 class="border-bottom pb-2 mb-3">
+          <i class="fas fa-cogs text-primary me-2"></i>
+          Technology Stack
+        </h2>
+        
+        <div class="row">
+          <div class="col-md-6">
+            <h3 class="h5 mt-3 mb-2">
+              <i class="fab fa-js-square text-warning me-2"></i>
+              Frontend
+            </h3>
+            <ul>
+              <li><strong>Vanilla JavaScript</strong> - No framework overhead</li>
+              <li><strong>Bootstrap 5</strong> - Modern, responsive UI</li>
+              <li><strong>Chart.js</strong> - Interactive data visualization</li>
+              <li><strong>Font Awesome</strong> - Rich icon library</li>
+            </ul>
+
+            <h3 class="h5 mt-4 mb-2">
+              <i class="fas fa-cube text-info me-2"></i>
+              Backend (WASM)
+            </h3>
+            <ul>
+              <li><strong>WebAssembly</strong> - Near-native performance</li>
+              <li><strong>Emscripten</strong> - C++ to WASM compiler</li>
+              <li><strong>FastAlign</strong> - Statistical word alignment</li>
+              <li><strong>Pyodide</strong> - Python runtime for SQLite</li>
+            </ul>
+          </div>
+
+          <div class="col-md-6">
+            <h3 class="h5 mt-3 mb-2">
+              <i class="fas fa-bolt text-danger me-2"></i>
+              Performance Optimizations
+            </h3>
+            <ul>
+              <li><strong>Multi-threading</strong> - Web Workers for parallel processing</li>
+              <li><strong>Batch processing</strong> - Efficient memory management for large datasets</li>
+              <li><strong>Virtualization</strong> - Render only visible rows (100-500 at a time)</li>
+              <li><strong>Debouncing</strong> - Optimized filtering and search</li>
+              <li><strong>Memory profiling</strong> - Track peak usage and optimize allocation</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- How It Works Section -->
+      <section class="mb-5">
+        <h2 class="border-bottom pb-2 mb-3">
+          <i class="fas fa-project-diagram text-primary me-2"></i>
+          How It Works
+        </h2>
+        
+        <ol class="list-unstyled">
+          <li class="mb-3 ps-4 border-start border-3 border-primary">
+            <strong class="d-block mb-1">
+              <i class="fas fa-upload text-primary me-2"></i>
+              1. Import Your Corpus
+            </strong>
+            <p class="text-muted mb-0">
+              Upload parallel text files (source and target languages) in plain text format, one sentence per line.
+            </p>
+          </li>
+          
+          <li class="mb-3 ps-4 border-start border-3 border-primary">
+            <strong class="d-block mb-1">
+              <i class="fas fa-sync-alt text-primary me-2"></i>
+              2. Compute Alignments
+            </strong>
+            <p class="text-muted mb-0">
+              Run FastAlign to compute bidirectional word alignments. The algorithm uses expectation-maximization (EM) to learn translation probabilities.
+            </p>
+          </li>
+          
+          <li class="mb-3 ps-4 border-start border-3 border-primary">
+            <strong class="d-block mb-1">
+              <i class="fas fa-chart-line text-primary me-2"></i>
+              3. Analyze Quality
+            </strong>
+            <p class="text-muted mb-0">
+              Review alignment quality metrics including confidence scores, agreement rates, and coverage statistics. Filter low-quality alignments and identify problematic sentence pairs.
+            </p>
+          </li>
+          
+          <li class="mb-3 ps-4 border-start border-3 border-primary">
+            <strong class="d-block mb-1">
+              <i class="fas fa-filter text-primary me-2"></i>
+              4. Extract Phrases
+            </strong>
+            <p class="text-muted mb-0">
+              Extract phrase pairs using heuristic methods based on alignment consistency. Configure phrase length, frequency thresholds, and quality filters.
+            </p>
+          </li>
+          
+          <li class="mb-3 ps-4 border-start border-3 border-primary">
+            <strong class="d-block mb-1">
+              <i class="fas fa-wrench text-primary me-2"></i>
+              5. Fix Errors & Refine
+            </strong>
+            <p class="text-muted mb-0">
+              Identify and fix alignment errors, remove misaligned sentence pairs, correct phrase boundaries, and refine the corpus quality through iterative analysis and manual review.
+            </p>
+          </li>
+          
+          <li class="mb-3 ps-4 border-start border-3 border-primary">
+            <strong class="d-block mb-1">
+              <i class="fas fa-download text-primary me-2"></i>
+              6. Export Results
+            </strong>
+            <p class="text-muted mb-0">
+              Export cleaned phrase tables, refined alignments, and quality reports in standard formats (CSV, TMX, Moses).
+            </p>
+          </li>
+        </ol>
+      </section>
+
+      <!-- Use Cases Section -->
+      <section class="mb-5">
+        <h2 class="border-bottom pb-2 mb-3">
+          <i class="fas fa-tasks text-primary me-2"></i>
+          Use Cases
+        </h2>
+        
+        <div class="row">
+          <div class="col-md-6">
+            <h3 class="h5 mt-3 mb-2">
+              <i class="fas fa-robot text-primary me-2"></i>
+              Machine Translation
+            </h3>
+            <p class="text-muted">
+              Build phrase tables for statistical and neural machine translation systems. 
+              Extract high-quality parallel phrases for training MT models.
+            </p>
+
+            <h3 class="h5 mt-4 mb-2">
+              <i class="fas fa-graduation-cap text-primary me-2"></i>
+              Education & Training
+            </h3>
+            <p class="text-muted">
+              Teach translation concepts, demonstrate alignment algorithms, and provide 
+              hands-on experience with parallel corpus processing.
+            </p>
+          </div>
+
+          <div class="col-md-6">
+            <h3 class="h5 mt-3 mb-2">
+              <i class="fas fa-book text-primary me-2"></i>
+              Linguistic Research
+            </h3>
+            <p class="text-muted">
+              Analyze translation patterns, study cross-lingual phenomena, and research 
+              alignment algorithms for low-resource language pairs.
+            </p>
+
+            <h3 class="h5 mt-4 mb-2">
+              <i class="fas fa-search text-primary me-2"></i>
+              Data Quality Assessment
+            </h3>
+            <p class="text-muted">
+              Evaluate parallel corpus quality, identify misalignments, and clean 
+              noisy data before training translation systems.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Performance Section -->
+      <section class="mb-5">
+        <h2 class="border-bottom pb-2 mb-3">
+          <i class="fas fa-tachometer-alt text-primary me-2"></i>
+          Performance Capabilities
+        </h2>
+        
+        <table class="table table-sm">
+          <thead class="table-light">
+            <tr>
+              <th>Operation</th>
+              <th>Dataset Size</th>
+              <th>Performance</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><i class="fas fa-align-justify text-primary me-2"></i>Word Alignment</td>
+              <td>100K sentence pairs</td>
+              <td><span class="badge bg-success">~2-5 minutes</span></td>
+            </tr>
+            <tr>
+              <td><i class="fas fa-language text-primary me-2"></i>Phrase Extraction</td>
+              <td>1M sentence pairs</td>
+              <td><span class="badge bg-success">~5-15 minutes</span></td>
+            </tr>
+            <tr>
+              <td><i class="fas fa-filter text-primary me-2"></i>Filtering & Search</td>
+              <td>1M alignments</td>
+              <td><span class="badge bg-success">&lt;1 second</span></td>
+            </tr>
+            <tr>
+              <td><i class="fas fa-database text-primary me-2"></i>Database Operations</td>
+              <td>500K phrase pairs</td>
+              <td><span class="badge bg-success">~10-30 seconds</span></td>
+            </tr>
+          </tbody>
+        </table>
+        
+        <div class="alert alert-warning border-start border-warning border-4">
+          <i class="fas fa-info-circle me-2"></i>
+          <strong>Note:</strong> Performance depends on your hardware (CPU cores, RAM) and browser. 
+          Chrome/Edge provide the best WebAssembly performance.
+        </div>
+      </section>
+
+      <!-- Privacy & Security Section -->
+      <section class="mb-5">
+        <h2 class="border-bottom pb-2 mb-3">
+          <i class="fas fa-shield-alt text-primary me-2"></i>
+          Privacy & Security
+        </h2>
+        
+        <div class="row">
+          <div class="col-md-6">
+            <h3 class="h5 mt-3 mb-2">
+              <i class="fas fa-lock text-success me-2"></i>
+              Complete Privacy
+            </h3>
+            <ul>
+              <li><strong>100% client-side processing</strong> - No data leaves your browser</li>
+              <li><strong>No server uploads</strong> - All files processed locally</li>
+              <li><strong>No tracking or analytics</strong> - Your work is completely private</li>
+              <li><strong>Offline-capable</strong> - Works without internet connection</li>
+            </ul>
+          </div>
+
+          <div class="col-md-6">
+            <h3 class="h5 mt-3 mb-2">
+              <i class="fas fa-hdd text-info me-2"></i>
+              Data Storage
+            </h3>
+            <ul>
+              <li><strong>IndexedDB</strong> - Browser-native persistent storage</li>
+              <li><strong>Local only</strong> - Data stored on your device</li>
+              <li><strong>Full control</strong> - Delete projects anytime</li>
+              <li><strong>Export/Import</strong> - Backup and restore your work</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="alert alert-success border-start border-success border-4 mt-3">
+          <i class="fas fa-user-shield me-2"></i>
+          <strong>Sensitive Data Safe:</strong> Perfect for confidential documents, proprietary corpora, 
+          or any data that cannot be uploaded to external servers.
+        </div>
+      </section>
+
+      <!-- System Requirements Section -->
+      <section class="mb-5">
+        <h2 class="border-bottom pb-2 mb-3">
+          <i class="fas fa-desktop text-primary me-2"></i>
+          System Requirements
+        </h2>
+        
+        <ul>
+          <li><strong>Browser:</strong> Chrome 90+, Edge 90+, Firefox 88+, Safari 14+ (Chrome/Edge recommended)</li>
+          <li><strong>RAM:</strong> 4GB minimum, 8GB+ recommended for large corpora</li>
+          <li><strong>Storage:</strong> 1GB+ free disk space for IndexedDB</li>
+          <li><strong>CPU:</strong> Multi-core processor recommended for parallel processing</li>
+        </ul>
+      </section>
+    </div>
+
+    <!-- Sidebar -->
+    <div class="col-lg-4">
+      <!-- Placeholder for sidebar content loaded from about-sidebar.html -->
+    </div>
+  </div>
+</div>
