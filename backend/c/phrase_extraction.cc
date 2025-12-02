@@ -1,3 +1,19 @@
+/*
+ * Copyright 2025 Samuel Frontull and Simon Haller-Seeber, University of Innsbruck
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -6,12 +22,17 @@
 #include <emscripten/emscripten.h>
 #include <unordered_set>
 #include <string>
+#include <vector>
+#include <algorithm>
+#include <climits>
 
 #define MAX_LINE_LENGTH 4096
 #define MAX_PHRASE_LENGTH 512
 #define MAX_TOKENS_PER_LINE 512
 #define MAX_ALIGNMENTS_PER_LINE 256
 #define MAX_PHRASES_PER_LINE 2048
+#define NO_BLANK_TOKEN "#NB"
+#define BLANK_TOKEN "#BLANK"
 
 typedef struct
 {
@@ -46,23 +67,52 @@ typedef struct
 // Global file mutex for safe file access
 static pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-// Helper: split a line into tokens
-TokenList split_tokens(char *line)
+// Dynamic int list helper
+struct IntList {
+    int *data;
+    int count;
+    int cap;
+    IntList(): data(nullptr), count(0), cap(0) {}
+    ~IntList() { free(data); }
+    void append(int v) {
+        if (count >= cap) {
+            int newcap = cap == 0 ? 4 : cap * 2;
+            data = (int*)realloc(data, sizeof(int) * newcap);
+            cap = newcap;
+        }
+        data[count++] = v;
+    }
+};
+
+TokenList split_tokens(const char *line)
 {
     TokenList tl = {.num_tokens = 0};
-    char *token = strtok(line, " \t\n");
-    while (token && tl.num_tokens < MAX_TOKENS_PER_LINE)
-    {   
-        char *tok_copy = strdup(token);
-        if (!tok_copy) { fprintf(stderr, "Memory allocation failed\n"); break; }
-        tl.tokens[tl.num_tokens++] = tok_copy;
 
-        token = strtok(NULL, " \t\n");
-        if (tl.num_tokens >= MAX_TOKENS_PER_LINE) { 
-            printf("Warning: line has more than %d tokens, truncating.\n", MAX_TOKENS_PER_LINE);
-            break; // Prevent overflow
-        }
+    // Make a writable copy for tokenization
+    char *tmp = strdup(line);
+    if (!tmp) {
+        fprintf(stderr, "Memory allocation failed\n");
+        return tl;
     }
+
+    char *saveptr = NULL;
+    char *token = strtok_r(tmp, " \t\n", &saveptr);
+
+    while (token && tl.num_tokens < MAX_TOKENS_PER_LINE)
+    {
+        tl.tokens[tl.num_tokens] = strdup(token);
+        if (!tl.tokens[tl.num_tokens]) {
+            fprintf(stderr, "Memory allocation failed\n");
+            break;
+        }
+
+        tl.num_tokens++;
+
+        token = strtok_r(NULL, " \t\n", &saveptr);
+    }
+
+    free(tmp);  // IMPORTANT: free the temporary copy
+
     return tl;
 }
 
@@ -100,6 +150,64 @@ int parse_alignments(char *line, int reverse_direction, Alignment *alignments)
     return count;
 }
 
+// Helper function to strip leading/trailing #NB and #BLANK tokens
+void strip_nb_bl(char *phrase) {
+    if (!phrase || strlen(phrase) == 0) return;
+    
+    const char *nb_token = NO_BLANK_TOKEN;
+    const char *blank_token = BLANK_TOKEN;
+    size_t nb_len = strlen(nb_token);
+    size_t blank_len = strlen(blank_token);
+    
+    char *start = phrase;
+    char *end = phrase + strlen(phrase);
+    
+    // Strip leading tokens
+    while (start < end) {
+        // Skip leading spaces
+        while (start < end && *start == ' ') start++;
+        if (start >= end) break;
+        
+        if (strncmp(start, nb_token, nb_len) == 0 && 
+            (start + nb_len == end || start[nb_len] == ' ')) {
+            start += nb_len;
+        } else if (strncmp(start, blank_token, blank_len) == 0 && 
+                   (start + blank_len == end || start[blank_len] == ' ')) {
+            start += blank_len;
+        } else {
+            break;
+        }
+    }
+    
+    // Strip trailing tokens
+    while (start < end) {
+        // Skip trailing spaces
+        while (end > start && *(end-1) == ' ') end--;
+        if (end <= start) break;
+        
+        if (end >= start + nb_len && strncmp(end - nb_len, nb_token, nb_len) == 0 &&
+            (end - nb_len == start || *(end - nb_len - 1) == ' ')) {
+            end -= nb_len;
+        } else if (end >= start + blank_len && strncmp(end - blank_len, blank_token, blank_len) == 0 &&
+                   (end - blank_len == start || *(end - blank_len - 1) == ' ')) {
+            end -= blank_len;
+        } else {
+            break;
+        }
+    }
+    
+    // Final trim spaces
+    while (start < end && *start == ' ') start++;
+    while (end > start && *(end-1) == ' ') end--;
+    
+    // Move result and null-terminate
+    size_t new_len = end - start;
+    if (start != phrase) {
+        memmove(phrase, start, new_len);
+    }
+    phrase[new_len] = '\0';
+}
+
 // Check if string is empty or only punctuation
 int is_valid_phrase(const char *str)
 {
@@ -134,118 +242,207 @@ int is_valid_phrase(const char *str)
     return 1;
 }
 
+// Build alignment maps: src_to_tgt[i] = list of target indices aligned to source i
+// and tgt_to_src[j] = list of source indices aligned to target j
+static void build_alignment_maps(const Alignment *alignments, int align_count,
+                                 int src_num, int tgt_num,
+                                 std::vector<IntList> &src_to_tgt,
+                                 std::vector<IntList> &tgt_to_src)
+{
+    src_to_tgt.assign(src_num, IntList());
+    tgt_to_src.assign(tgt_num, IntList());
 
-int get_phrases(TokenList src, TokenList tgt, Alignment *alignments, 
-    int align_count, int min_len, int max_len, PhrasePairSet *phrases_to_ignore, Phrase *phrases)
+    for (int i = 0; i < align_count; ++i) {
+        int s = alignments[i].src;
+        int t = alignments[i].tgt;
+        if (s < 0 || s >= src_num || t < 0 || t >= tgt_num) continue;
+        src_to_tgt[s].append(t);
+        tgt_to_src[t].append(s);
+    }
+}
+
+// Helper to join tokens into a safe buffer with a space between tokens
+static void build_phrase_from_tokens_safe(char *out_buf, size_t bufsize,
+                                          char **tokens, int start, int end_exclusive)
 {
 
-    int phrase_count = 0;
+    out_buf[0] = '\0';
+    for (int i = start; i < end_exclusive && tokens && tokens[i]; ++i) {
+        size_t cur = strlen(out_buf);
+        size_t toklen = strlen(tokens[i]);
+        size_t space_needed = toklen + ((i < end_exclusive - 1) ? 1 : 0);
+        if (cur + space_needed < bufsize - 1) {
+            strncat(out_buf, tokens[i], bufsize - cur - 1);
+            if (i < end_exclusive - 1) {
+                strncat(out_buf, " ", bufsize - strlen(out_buf) - 1);
+            }
+        } else {
+            size_t room = bufsize - cur - 1;
+            if (room > 0) {
+                strncat(out_buf, tokens[i], room);
+            }
+            break;
+        }
+    }
+}
 
-    for (int length = min_len; length <= max_len; length++)
-    {
-        for (int start_src = 0; start_src <= src.num_tokens - length; start_src++)
-        {
+struct ExtractedPhrase {
+    std::string src_phrase;
+    std::string tgt_phrase;
+    int direction; // 1 src->tgt, -1 tgt->src
+    int start_src;
+    int start_tgt;
+    int consistency_flag; // 0 if consistent both ways, 1 otherwise
+};
 
-            // Find aligned tgt tokens with bounds checking
+// Extract phrases for one direction with consistency checking
+static std::vector<ExtractedPhrase> extract_phrases_direction(
+    TokenList &src, TokenList &tgt,
+    const std::vector<IntList> &src_to_tgt,
+    const std::vector<IntList> &tgt_to_src,
+    int min_len, int max_len,
+    const PhrasePairSet *ignore_set,
+    int return_direction
+)
+{
+    std::vector<ExtractedPhrase> results;
+    int src_num = src.num_tokens;
+    int tgt_num = tgt.num_tokens;
+
+    char src_phrase_buf[MAX_PHRASE_LENGTH];
+    char tgt_phrase_buf[MAX_PHRASE_LENGTH];
+
+    for (int length = min_len; length <= max_len; ++length) {
+        for (int start_src = 0; start_src <= src_num - length; ++start_src) {
+
+            // Collect all target indices aligned to tokens in [start_src, start_src+length)
+            bool has_aligned = false;
             int start_tgt = -1, end_tgt = -1;
-            for (int i = 0; i < align_count; i++)
-            {
-                // Add bounds checking for alignment indices
-                if (alignments[i].src >= 0 && alignments[i].src < src.num_tokens &&
-                    alignments[i].tgt >= 0 && alignments[i].tgt < tgt.num_tokens &&
-                    alignments[i].src >= start_src && alignments[i].src < start_src + length)
-                {
-                    if (start_tgt == -1 || alignments[i].tgt < start_tgt)
-                        start_tgt = alignments[i].tgt;
-                    if (alignments[i].tgt > end_tgt)
-                        end_tgt = alignments[i].tgt;
+            for (int si = start_src; si < start_src + length; ++si) {
+                const IntList &il = src_to_tgt[si];
+                for (int k = 0; k < il.count; ++k) {
+                    int t = il.data[k];
+                    if (!has_aligned) {
+                        start_tgt = t;
+                        end_tgt = t;
+                        has_aligned = true;
+                    } else {
+                        if (t < start_tgt) start_tgt = t;
+                        if (t > end_tgt) end_tgt = t;
+                    }
                 }
             }
-            if (start_tgt == -1)
-                continue; // no aligned target tokens
-            end_tgt++;    // make it exclusive
-            
-            // Ensure target range is within bounds
-            if (end_tgt > tgt.num_tokens)
-                end_tgt = tgt.num_tokens;
+            if (!has_aligned) continue;
+            end_tgt = end_tgt + 1; // make exclusive
 
-            // Build phrase strings with bounds checking
-            char src_phrase[MAX_PHRASE_LENGTH] = "";
-            char tgt_phrase[MAX_PHRASE_LENGTH] = "";
-            
-            // Build source phrase safely
-            for (int i = start_src; i < start_src + length && i < src.num_tokens; i++)
-            {
-                size_t current_len = strlen(src_phrase);
-                size_t token_len = strlen(src.tokens[i]);
-                size_t space_needed = token_len + (i < start_src + length - 1 ? 1 : 0); // +1 for space if not last
-                
-                if (current_len + space_needed < MAX_PHRASE_LENGTH - 1)
-                {
-                    strncat(src_phrase, src.tokens[i], MAX_PHRASE_LENGTH - current_len - 1);
-                    if (i < start_src + length - 1)
-                        strncat(src_phrase, " ", MAX_PHRASE_LENGTH - strlen(src_phrase) - 1);
-                }
-                else
-                {
-                    break; // Phrase too long, truncate
+            if (start_tgt < 0) continue;
+            if (end_tgt > tgt_num) end_tgt = tgt_num;
+
+            // Reverse-project: find all source indices aligned to tokens in [start_tgt, end_tgt)
+            bool has_rev_aligned = false;
+            int aligned_start_src = INT_MAX, aligned_end_src = -1;
+            for (int ti = start_tgt; ti < end_tgt; ++ti) {
+                const IntList &il = tgt_to_src[ti];
+                for (int k = 0; k < il.count; ++k) {
+                    int s = il.data[k];
+                    if (!has_rev_aligned) {
+                        aligned_start_src = s;
+                        aligned_end_src = s;
+                        has_rev_aligned = true;
+                    } else {
+                        if (s < aligned_start_src) aligned_start_src = s;
+                        if (s > aligned_end_src) aligned_end_src = s;
+                    }
                 }
             }
-            
-            // Build target phrase safely
-            for (int i = start_tgt; i < end_tgt && i < tgt.num_tokens; i++)
-            {
-                size_t current_len = strlen(tgt_phrase);
-                size_t token_len = strlen(tgt.tokens[i]);
-                size_t space_needed = token_len + (i < end_tgt - 1 ? 1 : 0); // +1 for space if not last
-                
-                if (current_len + space_needed < MAX_PHRASE_LENGTH - 1)
-                {
-                    strncat(tgt_phrase, tgt.tokens[i], MAX_PHRASE_LENGTH - current_len - 1);
-                    if (i < end_tgt - 1)
-                        strncat(tgt_phrase, " ", MAX_PHRASE_LENGTH - strlen(tgt_phrase) - 1);
-                }
-                else
-                {
-                    break; // Phrase too long, truncate
-                }
+            if (!has_rev_aligned) continue;
+            aligned_end_src = aligned_end_src + 1; // make exclusive
+
+            // Consistency check: reverse-projected source span must equal original
+            int consistency_flag = 1;
+            if (aligned_start_src == start_src && aligned_end_src == start_src + length) {
+                consistency_flag = 0; // consistent (symmetric)
             }
 
-            if (is_valid_phrase(src_phrase) && is_valid_phrase(tgt_phrase))
-            {
+            // Build phrase strings
+            build_phrase_from_tokens_safe(src_phrase_buf, sizeof(src_phrase_buf), src.tokens, start_src, start_src + length);
+            build_phrase_from_tokens_safe(tgt_phrase_buf, sizeof(tgt_phrase_buf), tgt.tokens, start_tgt, end_tgt);
 
-                // check if phrase pair is in ignore list (O(1) hash lookup)
-                if (phrases_to_ignore && 
-                    phrases_to_ignore->find({src_phrase, tgt_phrase}) != phrases_to_ignore->end()) {
+            // Strip #NB and #BLANK from phrases
+            strip_nb_bl(src_phrase_buf);
+            strip_nb_bl(tgt_phrase_buf);
+
+            // Validate after stripping
+            if (!is_valid_phrase(src_phrase_buf) || !is_valid_phrase(tgt_phrase_buf)) {
+                continue;
+            }
+
+            std::string src_s(src_phrase_buf);
+            std::string tgt_s(tgt_phrase_buf);
+
+            // Check ignore list
+            if (ignore_set) {
+                if (ignore_set->find({src_s, tgt_s}) != ignore_set->end()) {
                     continue;
                 }
-
-                // also check if lower case of src_phrase and tgt_phrase is in ignore list
+                
+                // Also check lowercase
                 std::string src_lower, tgt_lower;
-                for (size_t i = 0; i < strlen(src_phrase); i++) {
-                    src_lower += tolower(src_phrase[i]);
-                }
-                for (size_t i = 0; i < strlen(tgt_phrase); i++) {
-                    tgt_lower += tolower(tgt_phrase[i]);
-                }
-
-                if (phrases_to_ignore && 
-                    phrases_to_ignore->find({src_lower, tgt_lower}) != phrases_to_ignore->end()) {
+                for (char c : src_s) src_lower += tolower(c);
+                for (char c : tgt_s) tgt_lower += tolower(c);
+                
+                if (ignore_set->find({src_lower, tgt_lower}) != ignore_set->end()) {
                     continue;
                 }
+            }
 
-                phrases[phrase_count].src_phrase = strdup(src_phrase);
-                phrases[phrase_count].tgt_phrase = strdup(tgt_phrase);
-                phrase_count++;
+            ExtractedPhrase ep;
+            ep.src_phrase = std::move(src_s);
+            ep.tgt_phrase = std::move(tgt_s);
+            ep.direction = return_direction;
+            ep.start_src = start_src;
+            ep.start_tgt = start_tgt;
+            ep.consistency_flag = consistency_flag;
 
-                if (phrase_count >= MAX_PHRASES_PER_LINE)
-                {
-                    printf("Warning: reached max phrases per line (%d), truncating.\n", MAX_PHRASES_PER_LINE);
-                    return phrase_count;
-                }
+            results.push_back(std::move(ep));
+
+            if ((int)results.size() >= MAX_PHRASES_PER_LINE) {
+                return results;
             }
         }
     }
+
+    return results;
+}
+
+// Main phrase extraction function with bidirectional consistency checking
+int get_phrases(TokenList src, TokenList tgt, Alignment *alignments, 
+    int align_count, int min_len, int max_len, PhrasePairSet *phrases_to_ignore, Phrase *phrases)
+{
+    int phrase_count = 0;
+
+    // Build alignment maps for forward direction
+    std::vector<IntList> src_to_tgt, tgt_to_src;
+    build_alignment_maps(alignments, align_count, src.num_tokens, tgt.num_tokens, src_to_tgt, tgt_to_src);
+
+    // Extract forward (src->tgt) with consistency checking
+    std::vector<ExtractedPhrase> forward_phrases = extract_phrases_direction(
+        src, tgt, src_to_tgt, tgt_to_src, min_len, max_len, phrases_to_ignore, 1
+    );
+
+    // Add forward phrases to output - ONLY CONSISTENT ONES
+    for (size_t i = 0; i < forward_phrases.size() && phrase_count < MAX_PHRASES_PER_LINE; ++i) {
+        // Only add if consistency_flag == 0 (consistent/symmetric)
+        if (forward_phrases[i].consistency_flag == 0) {
+            phrases[phrase_count].src_phrase = strdup(forward_phrases[i].src_phrase.c_str());
+            phrases[phrase_count].tgt_phrase = strdup(forward_phrases[i].tgt_phrase.c_str());
+            phrase_count++;
+        }
+    }
+
+    // No need to compute reverse direction since we only output consistent forward phrases
+    // Consistent reverse phrases would be duplicates of forward, and we don't want inconsistent ones
+
     return phrase_count;
 }
 
