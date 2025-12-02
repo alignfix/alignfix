@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="ui/img/alignfix.png" alt="AlignFix Logo" width="220"/>
+  <img src="ui/img/alignfix-logo.png" alt="AlignFix Logo" width="220"/>
   
   # AlignFix
 
