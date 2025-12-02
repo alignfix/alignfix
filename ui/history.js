@@ -1,3 +1,19 @@
+/**
+ * Copyright 2025 Samuel Frontull and Simon Haller-Seeber, University of Innsbruck
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { getFixes } from "../backend/js/fixes.js";
 
 /**
@@ -70,12 +86,16 @@ export async function renderHistory(projectId) {
     fixesHistory.forEach((entry, index) => {
       const fix1 = entry.src_fix ? entry.src_fix : entry.src_phrase;
       const fix2 = entry.tgt_fix ? entry.tgt_fix : entry.tgt_phrase;
+      const fixType = entry.type || 'fix';
+      const typeBadge = fixType === 'augment' 
+        ? '<span class="badge bg-success ms-2">Augment</span>' 
+        : '<span class="badge bg-primary ms-2">Fix</span>';
       
       const item = document.createElement("div");
       item.className = "list-group-item list-group-item-action";
       item.innerHTML = `
         <div class="mb-2 d-flex w-100 justify-content-between">
-          <h6 class="mb-1">Fix #${index + 1}</h6>
+          <h6 class="mb-1">${typeBadge} #${index + 1}</h6>
           <div class="text-end">
             <small class="text-muted d-block">
               ${entry.created_at || 'Unknown time'}
@@ -94,10 +114,10 @@ export async function renderHistory(projectId) {
         </div>
         <div class="d-flex w-100 justify-content-between">
           <h6 class="mb-1">
-            <span class="text-muted">Fixed to:</spaan>
-            <code class="bg-success text-white px-2 py-1 rounded">${fix1}</code> 
+            <span class="text-muted">${fixType === 'augment' ? 'Augmented to:' : 'Fixed to:'}</span>
+            <code class="bg-warning text-black px-2 py-1 rounded">${fix1}</code> 
             ↔
-            <code class="bg-success text-white px-2 py-1 rounded">${fix2}</code>
+            <code class="bg-warning text-black px-2 py-1 rounded">${fix2}</code>
           </h6>
           <div class="text-end">
              <span class="badge bg-secondary mt-1">${entry.percentage || 100}%</span>

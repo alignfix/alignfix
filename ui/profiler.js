@@ -1,3 +1,19 @@
+/**
+ * Copyright 2025 Samuel Frontull and Simon Haller-Seeber, University of Innsbruck
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 /*
   Patch Worker to count creations so profiler can measure "threads spawned"
   Works for code that uses new Worker(...) (including Emscripten pthread workers).
@@ -118,123 +134,7 @@ export const profiler = {
       console.log('Memory metrics: not available in this browser (performance.memory unsupported).');
     }
   },
-
-  // render a simple metrics summary into a DOM element (selector or element)
-  displayMetrics(target) {
-    let el = (typeof target === 'string') ? document.querySelector(target) : target;
-    if (!el) return;
-
-    // Build a compact table for nicer UI (uses bootstrap classes if available)
-    const table = document.createElement('table');
-    table.className = 'table table-sm table-striped';
-    table.style.marginBottom = '0';
-
-    const thead = document.createElement('thead');
-    thead.innerHTML = `<tr>
-      <th scope="col">Name</th>
-      <th scope="col" class="text-end">Calls</th>
-      <th scope="col" class="text-end">Avg CPU (ms)</th>
-      <th scope="col" class="text-end">Total CPU (ms)</th>
-      <th scope="col" class="text-end">Avg Mem Δ (KB)</th>
-      <th scope="col" class="text-end">Total Mem Δ (KB)</th>
-      <th scope="col" class="text-end">Threads</th>
-      <th scope="col" class="text-end">Last</th>
-    </tr>`;
-    table.appendChild(thead);
-
-    const tbody = document.createElement('tbody');
-
-    let overallCPU = 0;
-    let overallThreads = 0;
-    let anyMemSamples = false;
-    let overallMemDelta = 0;
-
-    for (const [name, entries] of Object.entries(this.data)) {
-      const totalCPU = entries.reduce((a, b) => a + b.cpu_ms, 0);
-      overallCPU += totalCPU;
-
-      const memSamples = entries.filter(e => e.mem_bytes !== null);
-      const totalMemAll = memSamples.reduce((a, b) => a + b.mem_bytes, 0);
-      overallMemDelta += totalMemAll;
-      if (memSamples.length) anyMemSamples = true;
-
-      const totalThreads = entries.reduce((a, b) => a + (b.threads_spawned || 0), 0);
-      overallThreads += totalThreads;
-
-      const avgCPU = totalCPU / entries.length;
-      const avgMem = memSamples.length ? (totalMemAll / memSamples.length) : null;
-      const last = entries[entries.length - 1];
-      const lastTs = last.timestamp;
-      const lastDate = new Date(lastTs).toLocaleTimeString();
-      const lastThreads = last && (last.threads_spawned !== undefined) ? last.threads_spawned : 'N/A';
-
-      const tr = document.createElement('tr');
-
-      const tdName = document.createElement('td');
-      tdName.textContent = name;
-      tr.appendChild(tdName);
-
-      const tdCalls = document.createElement('td');
-      tdCalls.className = 'text-end';
-      tdCalls.textContent = entries.length;
-      tr.appendChild(tdCalls);
-
-      const tdAvgCPU = document.createElement('td');
-      tdAvgCPU.className = 'text-end';
-      tdAvgCPU.textContent = avgCPU.toFixed(1);
-      tr.appendChild(tdAvgCPU);
-
-      const tdTotalCPU = document.createElement('td');
-      tdTotalCPU.className = 'text-end';
-      tdTotalCPU.textContent = totalCPU.toFixed(1);
-      tr.appendChild(tdTotalCPU);
-
-      const tdAvgMem = document.createElement('td');
-      tdAvgMem.className = 'text-end';
-      tdAvgMem.textContent = avgMem !== null ? (avgMem / 1024).toFixed(1) : 'N/A';
-      tr.appendChild(tdAvgMem);
-
-      const tdTotalMem = document.createElement('td');
-      tdTotalMem.className = 'text-end';
-      tdTotalMem.textContent = (totalMemAll !== 0 && memSamples.length) ? (totalMemAll / 1024).toFixed(1) : 'N/A';
-      tr.appendChild(tdTotalMem);
-
-      const tdThreads = document.createElement('td');
-      tdThreads.className = 'text-end';
-      tdThreads.textContent = `${totalThreads} / ${lastThreads}`;
-      tr.appendChild(tdThreads);
-
-      const tdLast = document.createElement('td');
-      tdLast.className = 'text-end';
-      tdLast.textContent = lastDate;
-      tr.appendChild(tdLast);
-
-      tbody.appendChild(tr);
-    }
-
-    table.appendChild(tbody);
-
-    // Footer with heap info or notice and overall CPU + overall threads
-    const footer = document.createElement('div');
-    footer.style.marginTop = '0.5rem';
-    footer.style.fontSize = '0.9rem';
-    footer.style.color = '#666';
-
-    const overallCPUstr = `Overall CPU: ${(overallCPU/1000).toFixed(2)} s (${overallCPU.toFixed(1)} ms)`;
-    const overallThreadsStr = `Overall threads spawned: ${overallThreads}`;
-
-    if (performance && performance.memory) {
-      footer.innerHTML = `${overallCPUstr} &nbsp;|&nbsp; ${overallThreadsStr} &nbsp;|&nbsp; Heap used: ${(performance.memory.usedJSHeapSize/1024/1024).toFixed(2)} MB of ${(performance.memory.jsHeapSizeLimit/1024/1024).toFixed(2)} MB`;
-    } else {
-      footer.textContent = `${overallCPUstr} | ${overallThreadsStr} | Memory metrics: not available in this browser.`;
-    }
-
-    // Replace element content
-    el.innerHTML = '';
-    el.appendChild(table);
-    el.appendChild(footer);
-  },
-
+  
   async measureAndLog(name, func) {
     await this.measure(name, func);
     this.reportToConsole();

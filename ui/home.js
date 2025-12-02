@@ -1,3 +1,19 @@
+/**
+ * Copyright 2025 Samuel Frontull and Simon Haller-Seeber, University of Innsbruck
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { initPyodide } from "../pyodide.js";
 import { computeAlignments, storeAlignments } from "../backend/js/aligner.js";
 import { extractPhrases } from "../backend/js/phrases.js";
@@ -291,9 +307,9 @@ async function loadDocuments() {
                 <span><i class="fas fa-font me-1"></i>Avg: ${srcStats.avg_tokens} tokens</span>
               </div>
             </div>
-            <div class="border rounded p-2" style="max-height: 360px; overflow-y: auto; font-size: 0.85rem;">
+            <div class="border rounded p-2" style="max-height: 360px; overflow-y: auto; font-size: 1rem;">
               <div class="text-muted small mb-1"><i class="fas fa-eye me-1"></i>Sample (first 3 lines):</div>
-              <div style="white-space: pre-wrap; word-break: break-word; font-family: 'Courier New', monospace;">
+              <div style="white-space: pre-wrap; word-break: break-word;">
 ${srcStats.sample.join('\n--\n')}</div>
             </div>
           </div>
@@ -311,9 +327,9 @@ ${srcStats.sample.join('\n--\n')}</div>
                 <span><i class="fas fa-font me-1"></i>Avg: ${tgtStats.avg_tokens} tokens</span>
               </div>
             </div>
-            <div class="border rounded p-2" style="max-height: 360px; overflow-y: auto; font-size: 0.85rem;">
+            <div class="border rounded p-2" style="max-height: 360px; overflow-y: auto; font-size: 1rem;">
               <div class="text-muted small mb-1"><i class="fas fa-eye me-1"></i>Sample (first 3 lines):</div>
-              <div style="white-space: pre-wrap; word-break: break-word; font-family: 'Courier New', monospace;">
+              <div style="white-space: pre-wrap; word-break: break-word;">
 ${tgtStats.sample.join('\n--\n')}</div>
             </div>
           </div>
@@ -426,18 +442,6 @@ async function setupProject() {
     console.log(`✓ Stored: project_id=${project_id}`);
     console.log('progress:85');
     await nextFrame();
-  
-  } catch (err) {
-    console.error('❌ Alignment error:', err);
-    alert('Error during alignment setup: ' + (err?.message || String(err)));
-    return;
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = '<i class="fas fa-play me-2"></i>Compute Alignments & Extract Phrases';
-    console.log('progress:0');
-  }
-  
-  try {
 
     if (!project_id) {
       throw new Error('Project ID is null after storing alignments.');
@@ -453,7 +457,6 @@ async function setupProject() {
     await nextFrame();
 
     // Update metrics
-    profiler.displayMetrics('#profiler-metrics');
     profiler.data = { ...profiler.data, ...(extractStats || {}) };
     updateProjectStats(project_id, profiler.data);
     console.log('progress:100');
@@ -483,7 +486,7 @@ async function setupProject() {
     console.log('✅ Project setup complete');
 
   } catch (err) {
-    console.error('❌ Phrase extraction error:', err);
+    console.error('❌ Error during project setup:', err);
     alert('Error: ' + (err?.message || String(err)));
   } finally {
     btn.disabled = false;
@@ -514,6 +517,19 @@ export async function renderHome(container) {
                 </button>
             </div>
         </form>
+
+        <!-- Documents Preview (shown after upload) -->
+        <div id="stats-container" class="card mt-3" style="display:none;">
+          <div class="card-header bg-light">
+            <div class="d-flex justify-content-between align-items-center">
+              <h6 class="mb-0">
+                <i class="fas fa-chart-line me-2"></i>Documents Preview
+              </h6>
+              <button id="toggle-stats" class="btn btn-sm btn-outline-secondary">Hide</button>
+            </div>
+          </div>
+          <div id="stats-content" class="card-body"></div>
+        </div>
 
         <!-- Processing Options (shown after documents are loaded) -->
         <div id="processing-options" class="card mt-3" style="display:none;">
@@ -579,24 +595,6 @@ export async function renderHome(container) {
           </div>
         </div>
 
-        <!-- Document Statistics (shown after upload) -->
-        <div id="stats-container" class="card mt-3" style="display:none;">
-          <div class="card-header bg-light">
-            <div class="d-flex justify-content-between align-items-center">
-              <h6 class="mb-0">
-                <i class="fas fa-chart-line me-2"></i>Document Statistics
-              </h6>
-              <button id="toggle-stats" class="btn btn-sm btn-outline-secondary">Hide</button>
-            </div>
-          </div>
-          <div id="stats-content" class="card-body"></div>
-        </div>
-
-        <!-- Profiler metrics -->
-        <div id="profiler-wrapper" class="mt-3" style="max-width:100%; overflow:auto;">
-          <div id="profiler-metrics" style="width:100%;"></div>
-        </div>
-
         <hr/>
 
         <div class="card">
@@ -650,7 +648,7 @@ export async function renderHome(container) {
           </ol>
           <hr/>
           <div>
-            <a href="https://github.com/your-repo/alignfix" target="_blank">
+            <a href="https://github.com/alignfix/alignfix" target="_blank">
               <i class="fab fa-github me-1"></i>View on GitHub
             </a>
             &nbsp;|&nbsp;

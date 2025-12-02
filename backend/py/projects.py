@@ -152,7 +152,7 @@ def get_project_data_for_download(project_id, export_phrases=False):
     cursor.execute("SELECT row_id, line1, line2, alignment, score FROM alignments WHERE project_id=? AND deleted_at IS NULL", (project_id,))
     alignments = cursor.fetchall()
 
-    cursor.execute("SELECT id, src_phrase, src_fix, tgt_phrase, tgt_fix, direction, num_occurrences, percentage, created_at FROM fixes WHERE project_id=?", (project_id,))
+    cursor.execute("SELECT id, src_phrase, src_fix, tgt_phrase, tgt_fix, direction, num_occurrences, percentage, type, created_at FROM fixes WHERE project_id=?", (project_id,))
     fixes = cursor.fetchall()
 
     phrases = []
@@ -201,7 +201,8 @@ def get_project_data_for_download(project_id, export_phrases=False):
                 "direction": row[5],
                 "num_occurrences": row[6],
                 "percentage": row[7],
-                "created_at": row[8]
+                "type": row[8],
+                "created_at": row[9]
             } for row in fixes
         ],
         "phrases": phrases

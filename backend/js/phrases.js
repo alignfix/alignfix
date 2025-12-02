@@ -1,3 +1,19 @@
+/**
+ * Copyright 2025 Samuel Frontull and Simon Haller-Seeber, University of Innsbruck
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { initPyodide } from "../../pyodide.js";
 import { profiler } from '../../ui/profiler.js';
 import { nextFrame } from "../../ui/utils.js";
@@ -5,6 +21,11 @@ import { getLinesStats } from "./stats.js";
 import { safeSyncfs } from "./storage.js";
 
 const SAVE_BATCH_SIZE = 100000; // adjust based on memory
+
+function trimPhrase(phrase) {
+  // trim #NB at start and end of phrases
+  return phrase.replace(/^#NB\s+/, '').replace(/\s+#NB$/, '');
+}
 
 function getOccurrencesFromFile(content, direction) {
 
@@ -15,6 +36,11 @@ function getOccurrencesFromFile(content, direction) {
       if (line.trim() === '') continue;
 
       let [phrase1, phrase2, row_id] = line.split('|||').map(s => s.trim());
+
+      // trim #NB at start and end of phraeses
+      phrase1 = trimPhrase(phrase1);
+      phrase2 = trimPhrase(phrase2);
+
       const key = `${phrase1}|||${phrase2}`;
 
       if (!occurrences[key]) {
@@ -722,6 +748,41 @@ export async function downloadIgnoredPhrases(project_id) {
   const a = document.createElement("a");
   a.href = url;
   a.download = `ignored_phrases_project_${project_id}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+
+}
+
+export async function downloadPhrases(project_id) {
+  
+  const pyodide = await initPyodide();
+
+  pyodide.globals.set("project_id", project_id);
+  
+  const response = await pyodide.runPythonAsync(`
+      import json
+      from phrases import get_symmetric_phrases
+      data = get_symmetric_phrases(project_id)
+      json.dumps(data)
+ `);
+
+  // Parse JSON string and transform to only include src and tgt keys
+  const allPhrases = JSON.parse(response);
+  const transformedData = allPhrases.map(item => ({
+    src: item.src_phrase,
+    tgt: item.tgt_phrase
+  }));
+
+  // create JSON file and download
+  const jsonStr = JSON.stringify(transformedData, null, 2);
+  const blob = new Blob([jsonStr], { type: 'application/json' });
+
+  // create a link to download the JSON file
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `phrases_project_${project_id}.json`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);

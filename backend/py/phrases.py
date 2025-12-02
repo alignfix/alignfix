@@ -501,12 +501,13 @@ def fetch_phrases(project_id, start, length, search_value, direction=0, min_leng
                    WHERE project_id=?
                    AND ignore=?
                    AND direction=?
-                   AND (LENGTH(src_phrase) - LENGTH(REPLACE(src_phrase, ' ', '')) = ?
-                   OR LENGTH(tgt_phrase) - LENGTH(REPLACE(tgt_phrase, ' ', '')) = ?)
                    ORDER BY num_occurrences DESC 
                    LIMIT ? OFFSET ?"""
-        cursor.execute(query, (project_id, ignore, direction, min_length - 1, min_length - 1, length, start))
+        cursor.execute(query, (project_id, ignore, direction, length, start))
+        # cursor.execute(query, (project_id, ignore, direction, min_length - 1, min_length - 1, length, start))
 
+                #    AND (LENGTH(src_phrase) - LENGTH(REPLACE(src_phrase, ' ', '')) = ?
+                #    OR LENGTH(tgt_phrase) - LENGTH(REPLACE(tgt_phrase, ' ', '')) = ?)
     phrases = cursor.fetchall()
 
     phrase_ids = [row[0] for row in phrases]
@@ -579,3 +580,57 @@ def import_ignored_from_file(project_id, file_content):
     except json.JSONDecodeError as e:
         print(f"JSON decode error: {e}")
         return 0
+
+def get_all_phrases(project_id):
+    """
+    Get all phrases for a project as a list of dictionaries.
+    Returns phrases with src_phrase, tgt_phrase, direction, num_occurrences.
+    """
+    _, cursor = get_db()
+    
+    cursor.execute("""
+        SELECT src_phrase, tgt_phrase, direction, num_occurrences
+        FROM phrases
+        WHERE project_id=?
+        ORDER BY num_occurrences DESC
+    """, (project_id,))
+    
+    phrases = cursor.fetchall()
+    
+    result = []
+    for row in phrases:
+        result.append({
+            "src_phrase": detokenise(row[0]),
+            "tgt_phrase": detokenise(row[1]),
+            "direction": row[2],
+            "num_occurrences": row[3]
+        })
+    
+    return result
+
+def get_symmetric_phrases(project_id):
+    """
+    Get all phrases for a project as a list of dictionaries.
+    Returns phrases with src_phrase, tgt_phrase, direction, num_occurrences.
+    """
+    _, cursor = get_db()
+    
+    cursor.execute("""
+        SELECT src_phrase, tgt_phrase, direction, num_occurrences
+        FROM phrases
+        WHERE project_id=? AND direction=0
+        ORDER BY num_occurrences DESC
+    """, (project_id,))
+    
+    phrases = cursor.fetchall()
+    
+    result = []
+    for row in phrases:
+        result.append({
+            "src_phrase": detokenise(row[0]),
+            "tgt_phrase": detokenise(row[1]),
+            "direction": row[2],
+            "num_occurrences": row[3]
+        })
+    
+    return result

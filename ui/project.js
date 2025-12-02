@@ -1,4 +1,20 @@
-import { extractPhrases, fetchPhrases, fetchIgnoredPhrases, setIgnorePhrase, importIgnoredFromFile, downloadIgnoredPhrases, deleteAllIgnoredPhrases } from "../backend/js/phrases.js";
+/**
+ * Copyright 2025 Samuel Frontull and Simon Haller-Seeber, University of Innsbruck
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { extractPhrases, fetchPhrases, fetchIgnoredPhrases, setIgnorePhrase, importIgnoredFromFile, downloadIgnoredPhrases, downloadPhrases, deleteAllIgnoredPhrases } from "../backend/js/phrases.js";
 import { fetchTranslations, storeTranslation, deleteTranslation } from "../backend/js/alignments.js";
 import { applyFixes } from "../backend/js/fixes.js";
 import { getProject, saveProject, downloadProject, mergeProjectStats } from "../backend/js/projects.js";
@@ -52,7 +68,7 @@ export async function renderProject(id) {
         <i class="fas fa-save"></i> Save
       </button>
       <button id="apply-fixes-btn" class="btn btn-success">
-        <i class="fas fa-sync"></i> Apply Fixes
+        <i class="fas fa-sync"></i> Apply Changes
       </button>
       <button id="download-btn" class="btn btn-secondary">
         <i class="fas fa-download"></i> Download
@@ -69,11 +85,16 @@ export async function renderProject(id) {
           </tr>
         </thead>
       </table>
+      <div class="mt-2">
+        <button id="download-phrases-btn" class="btn btn-sm btn-secondary">
+          <i class="fas fa-download"></i> Download Phrases
+        </button>
+      </div>
       <!-- Fixes Preview -->
       <div class="card mt-3 shadow-sm">
         <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
           <h6 class="card-title mb-0">
-            <i class="fas fa-tools me-2"></i>Pending Fixes
+            <i class="fas fa-tools me-2"></i>Pending Edits
           </h6>
           <div class="d-flex align-items-center gap-2">
             <span class="badge bg-light text-dark" id="fixes-count">0</span>
@@ -102,7 +123,7 @@ export async function renderProject(id) {
           <!-- Fixes List -->
           <div class="p-2" id="fixes-container" style="max-height: 200px; overflow-y: auto;">
             <div class="text-center text-muted py-3">
-              <i class="fas fa-info-circle me-2"></i>No fixes pending
+              <i class="fas fa-info-circle me-2"></i>No changes pefnding
             </div>
           </div>
         </div>
@@ -194,19 +215,28 @@ export async function renderProject(id) {
         <div class="d-grid gap-2 mb-2">
           <div class="row g-2 mb-2">
             <div class="col-6">
-              <button class="btn btn-secondary w-100" type="button" id="search-phrases-btn">
-                <i class="fas fa-search"></i> Search
+              <button class="btn btn-success w-100" type="button" id="augment-btn">
+                <i class="fas fa-clone"></i> Augment
               </button>
             </div>
             <div class="col-6">
               <button class="btn btn-primary w-100" type="button" id="add-fix-btn">
-            <i class="fas fa-plus"></i> Add Fix
-          </button>
+                <i class="fas fa-plus"></i> Add Fix
+              </button>
             </div>
           </div>
-          <button class="btn btn-outline-dark w-100 mb-2" type="button" id="clear-search-btn">
-            Clear Search
-          </button>
+          <div class="row g-2 mb-2">
+            <div class="col-6">
+              <button class="btn btn-outline w-100 mb-2" type="button" id="clear-search-btn">
+                Clear Search
+              </button>
+            </div>
+            <div class="col-6">
+              <button class="btn btn-secondary w-100" type="button" id="search-phrases-btn">
+                <i class="fas fa-search"></i> Search
+              </button>
+            </div>
+          </div>
         </div>
       </form>
     </div>
@@ -307,7 +337,7 @@ export async function renderProject(id) {
     new bootstrap.Tooltip(tooltipTriggerEl);
   });
 
-  document.getElementById("clear-search-btn").addEventListener("click", () => {
+  function clearSearch() {
     $('#fix-test1').val('');
     $('#fix-fix1').val('');
     $('#fix-test2').val('');
@@ -317,6 +347,10 @@ export async function renderProject(id) {
     $('#fix-fix2').prop('disabled', false);
     // reset to first page
     $('#translations-table').DataTable().page('first').draw('page');
+  }
+
+  document.getElementById("clear-search-btn").addEventListener("click", () => {
+    clearSearch();
   });
 
   bindAsyncButton(
@@ -334,42 +368,57 @@ export async function renderProject(id) {
     ""
   );
 
+  function addChange(type) {
+    const input = getPhraseInput();
+    input.type = type;
+    // if input already in fixes, do not add
+    const exists = fixes.find(f => 
+      f.src_phrase === input.src_phrase && 
+      f.tgt_fix === input.tgt_fix && 
+      f.direction === input.direction
+    );
+    if (exists) {
+      // change fix1 and fix2 to new values
+      exists.src_fix = input.src_fix;
+      exists.tgt_fix = input.tgt_fix;
+    } else {
+      fixes.push(input);
+    }
+
+    showTranslations(
+      input.src_phrase, 
+      input.tgt_phrase, 
+      input.direction, 
+      input.src_fix, 
+      input.tgt_fix
+    );
+
+    updateFixesList();
+  }
+
   bindAsyncButton(
     document.getElementById("add-fix-btn"), 
     () => {
-      const input = getPhraseInput();
-      // if input already in fixes, do not add
-      const exists = fixes.find(f => 
-        f.src_phrase === input.src_phrase && 
-        f.tgt_fix === input.tgt_fix && 
-        f.direction === input.direction
-      );
-      if (exists) {
-        // change fix1 and fix2 to new values
-        exists.src_fix = input.src_fix;
-        exists.tgt_fix = input.tgt_fix;
-      } else {
-        fixes.push(input);
-      }
-
-      showTranslations(
-        input.src_phrase, 
-        input.tgt_phrase, 
-        input.direction, 
-        input.src_fix, 
-        input.tgt_fix
-      );
-
-      updateFixesList();
+      addChange('fix');
     },
     ""
   );
+
+  bindAsyncButton(
+    document.getElementById("augment-btn"), 
+    () => {
+      addChange('augment');
+    },
+    ""
+  );
+
 
   bindAsyncButton(
     document.getElementById("apply-fixes-btn"), 
     async () => {
       await applyFixes(id, fixes);
       fixes = [];
+      clearSearch();
       updateFixesList();
       $('#phrases-table').DataTable().ajax.reload();
     }
@@ -386,6 +435,13 @@ export async function renderProject(id) {
     document.getElementById("download-ignored-btn"), 
     () => {
       downloadIgnoredPhrases(id)
+    }
+  );
+
+  bindAsyncButton(
+    document.getElementById("download-phrases-btn"), 
+    () => {
+      downloadPhrases(id)
     }
   );
 
@@ -668,7 +724,7 @@ function updateFixesList() {
   if (fixes.length === 0) {
     container.html(`
       <div class="text-center text-muted py-3">
-        <i class="fas fa-info-circle me-2"></i>No fixes pending
+        <i class="fas fa-info-circle me-2"></i>No changes pending
       </div>
     `);
     return;
@@ -693,6 +749,7 @@ function updateFixesList() {
               ${fix1_text ? `<span>${fix1_text}</span>` : ''}
               <span class="mx-1">${directionSymbol}</span> 
               ${fix2_text ? `<span>${fix2_text}</span>` : ''}
+              <span class="badge bg-info">${fix.type}</span>
             </div>
           </div>
           <div class="text-end ms-2">

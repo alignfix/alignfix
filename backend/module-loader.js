@@ -1,4 +1,20 @@
 /**
+ * Copyright 2025 Samuel Frontull and Simon Haller-Seeber, University of Innsbruck
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/**
  * Dynamic WASM Module Loader
  * Selects the appropriate WASM module version based on available hardware
  */
@@ -17,9 +33,9 @@ function detectHardwareCapabilities() {
 function selectOptimalConfig(cores, memory) {
     // Define available configurations (pool_size, max_memory_gb)
     const configs = [
-        { poolSize: 16, memoryGB: 16, suffix: '_p16', minCores: 12, minMemory: 12 },
-        { poolSize: 8,  memoryGB: 8,  suffix: '_p8',  minCores: 4,  minMemory: 4 },
-        { poolSize: 4,  memoryGB: 4,  suffix: '_p4',  minCores: 4,  minMemory: 4 },
+        { poolSize: 16, memoryGB: 16, suffix: '_p16', minCores: 9,  minMemory: 8 },
+        { poolSize: 8,  memoryGB: 8,  suffix: '_p8',  minCores: 5,  minMemory: 4 },
+        { poolSize: 4,  memoryGB: 4,  suffix: '_p4',  minCores: 2,  minMemory: 2 },
         { poolSize: 1,  memoryGB: 2,  suffix: '_p1',  minCores: 1,  minMemory: 1 }
     ];
     

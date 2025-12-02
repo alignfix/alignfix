@@ -169,32 +169,35 @@
         messageDiv.className = isError ? 'text-danger mb-1' : 'text-dark mb-1';
         messageDiv.innerHTML = `<span class="text-muted">[${timestamp}]</span> ${text}`;
         
-        logger.appendChild(messageDiv);
-        
+        if (text) {
+          logger.appendChild(messageDiv);
+        }
+
         // Scroll to bottom - get the parent container that has the scroll
         const logContainer = logger.parentElement;
         if (logContainer) {
             // Use setTimeout to ensure the DOM has updated before scrolling
             setTimeout(() => {
                 logContainer.scrollTop = logContainer.scrollHeight;
-            }, 0);
+            }, 50);
         }
         
         // Fallback: also try scrolling the logger itself
         setTimeout(() => {
             logger.scrollTop = logger.scrollHeight;
-        }, 0);
+        }, 50);
     }
 
     function toggleLogs() {
-        console.log('Toggle logs clicked'); // Debug log
         
         if (logContainer.classList.contains('show')) {
             logContainer.classList.remove('show');
-            console.log('Hiding logs');
         } else {
             logContainer.classList.add('show');
-            console.log('Showing logs');
+        }
+
+        if (logContainer.classList.contains('show')) {
+            console.log('');
         }
         updateLabel();
     }

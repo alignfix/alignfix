@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS fixes (
     direction TEXT,
     percentage INTEGER,
     num_occurrences INTEGER,
+    type TEXT,
     project_id INTEGER,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(project_id) REFERENCES projects(id)
