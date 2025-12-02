@@ -12,8 +12,9 @@ configs=(
     "1 2GB"
     "4 4GB"
     "8 4GB"
-    "16 8GB"
-    "32 8GB"
+    "8 8GB"
+    "16 16GB"
+    "32 16GB"
 )
 
 for config in "${configs[@]}"; do
