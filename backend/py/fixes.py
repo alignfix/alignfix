@@ -652,7 +652,7 @@ def apply_duplication_fixes(project_id, fixes):
                         break
                 new_line2 = ' '.join(text2_tokens)
 
-            new_row_id = num_rows + doc_idx
+            new_row_id = num_rows + doc_idx + fix_i
             # Insert new row
             cursor.execute("""
                 INSERT OR IGNORE INTO alignments (row_id, project_id, line1, line2, alignment, score)
@@ -673,10 +673,9 @@ def apply_duplication_fixes(project_id, fixes):
                 pairs_to_add[(src_p, tgt_p, dir_p)].append(new_row_id)
                 pairs_to_resync.add((src_p, tgt_p, dir_p))
 
+        conn.commit()
         applied_fixes += 1
         print(f"✅ Duplication applied to {len(res)} occurrences")
-
-    conn.commit()
 
     print('progress:20')
     print('operation:Adding phrase occurrences for duplicated rows')
