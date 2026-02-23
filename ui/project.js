@@ -374,6 +374,8 @@ export async function renderProject(id) {
     // if input already in fixes, do not add
     const exists = fixes.find(f => 
       f.src_phrase === input.src_phrase && 
+      f.tgt_phrase === input.tgt_phrase && 
+      f.src_fix === input.src_fix && 
       f.tgt_fix === input.tgt_fix && 
       f.direction === input.direction
     );
