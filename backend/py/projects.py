@@ -157,7 +157,7 @@ def get_project_data_for_download(project_id, export_phrases=False):
 
     phrases = []
     if export_phrases:
-        cursor.execute("SELECT src_phrase, tgt_phrase, direction, num_occurrences, created_at FROM phrases WHERE project_id=?", (project_id,))
+        cursor.execute("SELECT src_phrase, tgt_phrase, direction, num_occurrences, created_at FROM phrases WHERE project_id=? AND num_occurrences > 0", (project_id,))
         phrases_entries = cursor.fetchall()
         for row in phrases_entries:
 
@@ -230,13 +230,134 @@ def update_translation(row_id, line1, line2):
     line2 = tokenise(line2, as_string=True)
 
     conn, cursor = get_db()
+    # Mark translation as deleted
     cursor.execute("UPDATE alignments SET line1=?, line2=? WHERE row_id=?", (line1, line2, row_id))
+
+    # Delete occurrences for this row_id
+    cursor.execute("DELETE FROM occurrences WHERE row_id=?", (row_id,))
+    
+    # Update num_occurrences for affected phrases, counting only non-deleted alignments
+    # Get the project_id first
+    cursor.execute("SELECT project_id FROM alignments WHERE row_id=?", (row_id,))
+    result = cursor.fetchone()
+    if result:
+        project_id = result[0]
+        cursor.execute("""
+            UPDATE phrases
+            SET num_occurrences = (
+                SELECT COUNT(*) 
+                FROM occurrences o
+                INNER JOIN alignments a ON o.row_id = a.row_id AND o.project_id = a.project_id
+                WHERE o.id_phrases = phrases.id 
+                AND a.deleted_at IS NULL
+            )
+            WHERE project_id = ?
+        """, (project_id,))
+
     conn.commit()
 
 def delete_translation(row_id):
     conn, cursor = get_db()
     cursor.execute("UPDATE alignments SET deleted_at=CURRENT_TIMESTAMP WHERE row_id=?", (row_id,))
     conn.commit()
+
+def delete_translations_by_phrase_pair(project_id, phrase1, phrase2, direction):
+    """Delete all translations containing the specified phrase(s) and clean up occurrences
+    
+    Can delete by:
+    - Both phrases (phrase1 AND phrase2)
+    - Source only (phrase1 only)
+    - Target only (phrase2 only)
+    """
+    phrase1_raw = tokenise(phrase1, as_string=True) if phrase1 else ""
+    phrase2_raw = tokenise(phrase2, as_string=True) if phrase2 else ""
+    
+    has_phrase1 = bool(phrase1_raw.strip())
+    has_phrase2 = bool(phrase2_raw.strip())
+    
+    if not has_phrase1 and not has_phrase2:
+        print("No phrases provided for deletion")
+        return 0
+    
+    print(f"Deleting translations - Src: [{phrase1_raw}], Tgt: [{phrase2_raw}], direction: {direction}")
+    
+    conn, cursor = get_db()
+    
+    # Build query to find matching alignments
+    conditions = ["project_id=?", "deleted_at IS NULL"]
+    params = [project_id]
+    
+    if has_phrase1 and has_phrase2:
+        # Both phrases must match
+        if direction == '1':
+            # Source phrase is cause -> only match based on alignment direction
+            print("Direction filter: Source causes target")
+        elif direction == '-1':
+            # Target phrase is cause
+            print("Direction filter: Target causes source")
+        conditions.append("line1 LIKE ?")
+        conditions.append("line2 LIKE ?")
+        params.append(f"% {phrase1_raw} %")
+        params.append(f"% {phrase2_raw} %")
+        print(f"Deleting sentences with BOTH phrases")
+    elif has_phrase1:
+        # Only source phrase
+        conditions.append("line1 LIKE ?")
+        params.append(f"% {phrase1_raw} %")
+        print(f"Deleting sentences with source phrase only")
+    else:
+        # Only target phrase
+        conditions.append("line2 LIKE ?")
+        params.append(f"% {phrase2_raw} %")
+        print(f"Deleting sentences with target phrase only")
+    
+    where_clause = " AND ".join(conditions)
+    
+    # Find matching row_ids
+    query = f"SELECT row_id FROM alignments WHERE {where_clause}"
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    row_ids = [row[0] for row in rows]
+    
+    print(f"Found {len(row_ids)} sentences to delete: {row_ids[:10] if row_ids else []}")
+    
+    if not row_ids:
+        print("No sentences found to delete")
+        return 0
+    
+    # Mark translations as deleted
+    placeholders = ','.join('?' * len(row_ids))
+    cursor.execute(
+        f"UPDATE alignments SET deleted_at=CURRENT_TIMESTAMP WHERE row_id IN ({placeholders}) AND project_id=?",
+        row_ids + [project_id]
+    )
+    print(f"Marked {len(row_ids)} alignments as deleted")
+    
+    # Delete occurrences entries for these row_ids
+    cursor.execute(
+        f"DELETE FROM occurrences WHERE row_id IN ({placeholders}) AND project_id=?",
+        row_ids + [project_id]
+    )
+    print(f"Deleted occurrence entries for {len(row_ids)} row_ids")
+    
+    # Update num_occurrences for all affected phrases, counting only non-deleted alignments
+    cursor.execute("""
+        UPDATE phrases
+        SET num_occurrences = (
+            SELECT COUNT(*) 
+            FROM occurrences o
+            INNER JOIN alignments a ON o.row_id = a.row_id AND o.project_id = a.project_id
+            WHERE o.id_phrases = phrases.id 
+            AND a.deleted_at IS NULL
+        )
+        WHERE project_id = ?
+    """, (project_id,))
+    print(f"Updated num_occurrences for all phrases in project {project_id}")
+    
+    conn.commit()
+    print(f"Successfully deleted {len(row_ids)} translations")
+    
+    return len(row_ids)
 
 def search_translations(project_id, phrase1, phrase2, search_value=None, start=0, length=10):
     conn, cursor = get_db()

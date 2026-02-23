@@ -174,5 +174,90 @@ span.score {
 .alignfix-icon {
   background: linear-gradient(to left, #f39200 50%, #003361 50%);
   -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
+}
+
+/* Custom Modal Styling */
+#customModal .modal-content {
+  border: none;
+  border-radius: 12px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+}
+
+#customModal .modal-header {
+  border-bottom: 1px solid #dee2e6;
+  padding: 1.25rem 1.5rem;
+  background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
+  border-radius: 12px 12px 0 0;
+}
+
+#customModal .modal-title {
+  font-weight: 600;
+  font-size: 1.25rem;
+}
+
+#customModal .modal-title i {
+  font-size: 1.5rem;
+}
+
+#customModal .modal-body {
+  padding: 1.5rem;
+  font-size: 1rem;
+  line-height: 1.6;
+}
+
+#customModal .modal-footer {
+  border-top: 1px solid #dee2e6;
+  padding: 1rem 1.5rem;
+  background-color: #f8f9fa;
+  border-radius: 0 0 12px 12px;
+  gap: 0.5rem;
+}
+
+#customModal .modal-footer .btn {
+  min-width: 100px;
+  font-weight: 500;
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+}
+
+#customModal .modal-footer .btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+#customModal .modal-backdrop {
+  background-color: rgba(0, 0, 0, 0.5);
+}
+
+/* Modal Animation */
+#customModal.fade .modal-dialog {
+  transition: transform 0.3s ease-out, opacity 0.3s ease-out;
+}
+
+#customModal.show .modal-dialog {
+  transform: translateY(0);
+}
+
+/* Button specific colors for better UX */
+#customModal .btn-danger {
+  background-color: #dc3545;
+  border-color: #dc3545;
+}
+
+#customModal .btn-danger:hover {
+  background-color: #c82333;
+  border-color: #bd2130;
+}
+
+#customModal .btn-primary {
+  background-color: #003361;
+  border-color: #003361;
+}
+
+#customModal .btn-primary:hover {
+  background-color: #002751;
+  border-color: #002751;
 }

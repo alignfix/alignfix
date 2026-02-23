@@ -449,13 +449,22 @@ def get_phrase_occurrences(project_id, phrase1_tok_str, phrase2_tok_str, directi
         return [], 0
 
     # get total count without limit/offset
-    cursor.execute('SELECT COUNT(*) FROM occurrences WHERE id_phrases=? AND project_id=?',
-              (phrase_id, project_id))
+    cursor.execute('''
+        SELECT COUNT(*) 
+        FROM occurrences o
+        INNER JOIN alignments a ON o.row_id = a.row_id AND o.project_id = a.project_id
+        WHERE o.id_phrases=? AND o.project_id=? AND a.deleted_at IS NULL
+    ''', (phrase_id, project_id))
     total_count = cursor.fetchone()[0]
 
     # fetch paginated rows
-    cursor.execute('SELECT row_id FROM occurrences WHERE id_phrases=? AND project_id=? LIMIT ? OFFSET ?',
-              (phrase_id, project_id, limit, offset))
+    cursor.execute('''
+        SELECT o.row_id 
+        FROM occurrences o
+        INNER JOIN alignments a ON o.row_id = a.row_id AND o.project_id = a.project_id
+        WHERE o.id_phrases=? AND o.project_id=? AND a.deleted_at IS NULL
+        LIMIT ? OFFSET ?
+    ''', (phrase_id, project_id, limit, offset))
     rows = cursor.fetchall()
 
     return [row[0] for row in rows], total_count
@@ -465,8 +474,8 @@ def fetch_phrases(project_id, start, length, search_value, direction=0, min_leng
     _, cursor = get_db()
 
     ignore = 0  # only fetch non-ignored phrases
-    # 1) Count total rows for this project (before LIMIT/OFFSET)
-    cursor.execute("SELECT COUNT(*) FROM phrases WHERE project_id=? AND ignore=? AND direction=? AND (LENGTH(src_phrase) - LENGTH(REPLACE(src_phrase, ' ', '')) = ? OR LENGTH(tgt_phrase) - LENGTH(REPLACE(tgt_phrase, ' ', '')) = ?)", (project_id, ignore, direction, min_length - 1, min_length - 1))
+    # 1) Count total rows for this project (before LIMIT/OFFSET), excluding phrases with 0 occurrences
+    cursor.execute("SELECT COUNT(*) FROM phrases WHERE project_id=? AND ignore=? AND direction=? AND num_occurrences > 0 AND (LENGTH(src_phrase) - LENGTH(REPLACE(src_phrase, ' ', '')) = ? OR LENGTH(tgt_phrase) - LENGTH(REPLACE(tgt_phrase, ' ', '')) = ?)", (project_id, ignore, direction, min_length - 1, min_length - 1))
     total_records = cursor.fetchone()[0]
 
     # 2) Apply optional filtering
@@ -481,6 +490,7 @@ def fetch_phrases(project_id, start, length, search_value, direction=0, min_leng
                      FROM phrases
                      WHERE project_id=? 
                      AND ignore=?
+                     AND num_occurrences > 0
                      AND (src_phrase LIKE ? OR tgt_phrase LIKE ?)""",
                   (project_id, ignore, like, like))
         filtered_records = cursor.fetchone()[0]
@@ -489,6 +499,7 @@ def fetch_phrases(project_id, start, length, search_value, direction=0, min_leng
                    FROM phrases
                    WHERE project_id=? 
                    AND ignore=?
+                   AND num_occurrences > 0
                    AND (src_phrase LIKE ? OR tgt_phrase LIKE ?)
                    ORDER BY num_occurrences DESC 
                    LIMIT ? OFFSET ?"""
@@ -501,6 +512,7 @@ def fetch_phrases(project_id, start, length, search_value, direction=0, min_leng
                    WHERE project_id=?
                    AND ignore=?
                    AND direction=?
+                   AND num_occurrences > 0
                    ORDER BY num_occurrences DESC 
                    LIMIT ? OFFSET ?"""
         cursor.execute(query, (project_id, ignore, direction, length, start))

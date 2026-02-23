@@ -179,9 +179,12 @@ export async function tokeniseLines(inputLines) {
   const numCores = parseInt(document.getElementById("num-cores-input")?.value) 
                     || window.navigator.hardwareConcurrency || 1;
   const poolSize = Math.min(config.poolSize, numCores);
+
+  console.log(`⚙️ Initializing WASM module with ${poolSize} worker threads...`);
   let module = await createModule({ 
     pthreadPoolSize: poolSize
   });
+  console.log('✓ WASM module initialized successfully');
 
   const CHUNK_SIZE = getTextTokeniseChunkSize(numCores);
   const totalChunks = Math.ceil(inputLines.length / CHUNK_SIZE);

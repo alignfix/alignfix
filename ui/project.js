@@ -15,7 +15,7 @@
  */
 
 import { extractPhrases, fetchPhrases, fetchIgnoredPhrases, setIgnorePhrase, importIgnoredFromFile, downloadIgnoredPhrases, downloadPhrases, deleteAllIgnoredPhrases } from "../backend/js/phrases.js";
-import { fetchTranslations, storeTranslation, deleteTranslation } from "../backend/js/alignments.js";
+import { fetchTranslations, storeTranslation, deleteTranslation, deleteTranslationsByPhrasePair } from "../backend/js/alignments.js";
 import { applyFixes } from "../backend/js/fixes.js";
 import { getProject, saveProject, downloadProject, mergeProjectStats } from "../backend/js/projects.js";
 import { recomputeAlignments } from "../backend/js/aligner.js";
@@ -24,6 +24,96 @@ import { profiler } from "./profiler.js";
 
 let fixes = [];  // global list of fixes
 let ignored = [];
+
+// Custom modal dialog functions
+function showModal(title, message, type = 'info', buttons = []) {
+  return new Promise((resolve) => {
+    const modalId = 'customModal';
+    let existingModal = document.getElementById(modalId);
+    
+    if (existingModal) {
+      existingModal.remove();
+    }
+
+    const iconMap = {
+      'info': '<i class="fas fa-info-circle text-info"></i>',
+      'success': '<i class="fas fa-check-circle text-success"></i>',
+      'warning': '<i class="fas fa-exclamation-triangle text-warning"></i>',
+      'danger': '<i class="fas fa-exclamation-circle text-danger"></i>',
+      'question': '<i class="fas fa-question-circle text-primary"></i>'
+    };
+
+    const icon = iconMap[type] || iconMap['info'];
+
+    let buttonHtml = '';
+    if (buttons.length === 0) {
+      buttonHtml = '<button type="button" class="btn btn-primary" data-result="ok">OK</button>';
+    } else {
+      buttonHtml = buttons.map(btn => 
+        `<button type="button" class="btn btn-${btn.variant || 'secondary'}" data-result="${btn.value}">${btn.label}</button>`
+      ).join('');
+    }
+
+    const modalHtml = `
+      <div class="modal fade" id="${modalId}" tabindex="-1" aria-hidden="true" data-bs-backdrop="static">
+        <div class="modal-dialog modal-dialog-centered">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title d-flex align-items-center gap-2">
+                ${icon}
+                <span>${title}</span>
+              </h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+              <p style="white-space: pre-wrap;">${message}</p>
+            </div>
+            <div class="modal-footer">
+              ${buttonHtml}
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+    const modalElement = document.getElementById(modalId);
+    const modal = new bootstrap.Modal(modalElement);
+
+    modalElement.querySelectorAll('[data-result]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const result = btn.dataset.result;
+        modal.hide();
+        resolve(result);
+      });
+    });
+
+    modalElement.addEventListener('hidden.bs.modal', () => {
+      modalElement.remove();
+      resolve(null);
+    });
+
+    modal.show();
+  });
+}
+
+function showAlert(message, title = 'Notice', type = 'info') {
+  return showModal(title, message, type);
+}
+
+function showConfirm(message, title = 'Confirm', type = 'question') {
+  return showModal(title, message, type, [
+    { label: 'Cancel', value: 'cancel', variant: 'secondary' },
+    { label: 'Confirm', value: 'confirm', variant: 'primary' }
+  ]);
+}
+
+function showDeleteConfirm(message, title = 'Delete Confirmation') {
+  return showModal(title, message, 'danger', [
+    { label: 'Cancel', value: 'cancel', variant: 'secondary' },
+    { label: 'Delete', value: 'delete', variant: 'danger' }
+  ]);
+}
 
 function getDirectionSymbol(direction) {
   switch (String(direction)) {
@@ -237,6 +327,13 @@ export async function renderProject(id) {
               </button>
             </div>
           </div>
+          <div class="row g-2 mb-2">
+            <div class="col-12">
+              <button class="btn btn-outline-danger w-100" type="button" id="delete-sentences-btn">
+                <i class="fas fa-trash"></i> Delete Matching Sentences
+              </button>
+            </div>
+          </div>
         </div>
       </form>
     </div>
@@ -368,6 +465,41 @@ export async function renderProject(id) {
     ""
   );
 
+  bindAsyncButton(
+    document.getElementById("delete-sentences-btn"),
+    async () => {
+      const input = getPhraseInput();
+      const srcPhrase = input.src_phrase.trim();
+      const tgtPhrase = input.tgt_phrase.trim();
+      
+      if (!srcPhrase && !tgtPhrase) {
+        await showAlert("Please enter at least one phrase (Phrase 1 or Phrase 2) to delete matching sentences.", "No Phrase Entered", "warning");
+        return;
+      }
+      
+      let message = "Are you sure you want to delete all sentences where:\n\n";
+      if (srcPhrase && tgtPhrase) {
+        message += `• Source contains: "${srcPhrase}"\n• AND Target contains: "${tgtPhrase}"`;
+      } else if (srcPhrase) {
+        message += `• Source contains: "${srcPhrase}"`;
+      } else {
+        message += `• Target contains: "${tgtPhrase}"`;
+      }
+      message += "\n\nThis action cannot be undone!";
+      
+      const result = await showDeleteConfirm(message, "Delete Sentences");
+      if (result !== 'delete') {
+        return;
+      }
+      
+      const deletedCount = await deleteTranslationsByPhrasePair(id, srcPhrase, tgtPhrase, input.direction);
+      await showAlert(`Successfully deleted ${deletedCount} sentence(s).`, "Deletion Complete", "success");
+      phrasesTable.ajax.reload();
+      translationsTable.ajax.reload();
+    },
+    ""
+  );
+
   function addChange(type) {
     const input = getPhraseInput();
     input.type = type;
@@ -448,27 +580,32 @@ export async function renderProject(id) {
   );
 
 
-  document.getElementById("fixes-file-input").addEventListener("change", function(event) {
+  document.getElementById("fixes-file-input").addEventListener("change", async function(event) {
     const file = event.target.files[0]; 
     if (file) {
       console.log("Selected file:", file.name);
 
       const reader = new FileReader();
-      reader.onload = function(e) {
-        const importedFixes = JSON.parse(e.target.result);
+      reader.onload = async function(e) {
+        try {
+          const importedFixes = JSON.parse(e.target.result);
 
-        if (!Array.isArray(importedFixes)) {
-          console.error("File content must be a JSON array");
-          return;
+          if (!Array.isArray(importedFixes)) {
+            await showAlert("The imported file must contain a JSON array of fixes.", "Invalid File Format", "danger");
+            return;
+          }
+
+          // Add each entry to the global fixes array
+          importedFixes.forEach(entry => {
+            fixes.push(entry);
+          });
+
+          updateFixesList();
+          await showAlert(`Successfully imported ${importedFixes.length} fix(es).`, "Import Complete", "success");
+        } catch (error) {
+          console.error("Error parsing JSON:", error);
+          await showAlert("Failed to parse the JSON file. Please ensure the file contains valid JSON.", "Import Error", "danger");
         }
-
-        // Add each entry to the global fixes array
-        importedFixes.forEach(entry => {
-          fixes.push(entry);
-        });
-
-        updateFixesList();
-
       };
       reader.readAsText(file);
     }
@@ -645,7 +782,11 @@ export async function renderProject(id) {
   bindAsyncButton(
     document.getElementById("delete-ignored-btn"), 
     async () => {
-      if (!confirm("Are you sure you want to delete all ignored phrases?")) {
+      const result = await showDeleteConfirm(
+        "Are you sure you want to delete all ignored phrases?\n\nThis will remove all phrases from the ignore list.",
+        "Delete All Ignored Phrases"
+      );
+      if (result !== 'delete') {
         return;
       }
       await deleteAllIgnoredPhrases(id);
@@ -704,15 +845,18 @@ function storeTranslationBtn(row_id) {
   storeTranslation(row_id, line1, line2);
 }
 
-function removeTranslationBtn(row_id) {
-
+async function removeTranslationBtn(row_id) {
   // ask alert to confirm
-  if (!confirm("Are you sure you want to remove this translation?")) {
+  const result = await showDeleteConfirm(
+    "Are you sure you want to remove this translation?",
+    "Remove Translation"
+  );
+  if (result !== 'delete') {
     return;
   }
 
   // store empty translation
-  deleteTranslation(row_id);
+  await deleteTranslation(row_id);
   // redraw table
   $('#translations-table').DataTable().ajax.reload(null, false); // false to stay on current page
 }

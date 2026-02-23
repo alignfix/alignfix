@@ -512,7 +512,10 @@ export async function extractPhrases(project_id) {
 
     const { createModule, config } = await window.WasmModuleLoader.loadPhraseExtraction();
     const poolSize = Math.min(config.poolSize, numCores);
+
+    console.log(`⚙️ Initializing WASM module with ${poolSize} worker threads...`);
     const module = await createModule({ pthreadPoolSize: poolSize });
+    console.log('✓ WASM module initialized successfully');
     console.log('progress:10');
 
     // Prepare data chunks

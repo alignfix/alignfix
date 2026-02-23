@@ -92,3 +92,23 @@ export async function deleteTranslation(id) {
     
   return;
 }
+
+export async function deleteTranslationsByPhrasePair(projectId, srcPhrase, tgtPhrase, direction) {
+
+  const pyodide = await initPyodide();
+
+  pyodide.globals.set("project_id", projectId);
+  pyodide.globals.set("src_phrase", srcPhrase);
+  pyodide.globals.set("tgt_phrase", tgtPhrase);
+  pyodide.globals.set("direction", direction);
+
+  const deletedCount = await pyodide.runPythonAsync(`
+      from projects import delete_translations_by_phrase_pair
+      int(delete_translations_by_phrase_pair(project_id, src_phrase, tgt_phrase, direction))
+  `);
+
+  await safeSyncfs(pyodide);
+  console.log(`Deleted ${deletedCount} translations with phrase pair "${srcPhrase}" ↔ "${tgtPhrase}"`);
+    
+  return deletedCount;
+}
