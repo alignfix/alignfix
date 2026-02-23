@@ -6,6 +6,7 @@ import json
 
 from text import tokenise, detokenise, highlight_tokens
 from alignment import parse_alignment
+from fixes import save_deletion
 from phrases import get_directed_phrases_from_texts_and_alignment, get_phrase_occurrences
 from db import get_db
 
@@ -356,6 +357,9 @@ def delete_translations_by_phrase_pair(project_id, phrase1, phrase2, direction):
     
     conn.commit()
     print(f"Successfully deleted {len(row_ids)} translations")
+    
+    # Save deletion to history
+    save_deletion(project_id, phrase1, phrase2, direction, len(row_ids))
     
     return len(row_ids)
 

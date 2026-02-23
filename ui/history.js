@@ -87,9 +87,46 @@ export async function renderHistory(projectId) {
       const fix1 = entry.src_fix ? entry.src_fix : entry.src_phrase;
       const fix2 = entry.tgt_fix ? entry.tgt_fix : entry.tgt_phrase;
       const fixType = entry.type || 'fix';
-      const typeBadge = fixType === 'augment' 
-        ? '<span class="badge bg-success ms-2">Augment</span>' 
-        : '<span class="badge bg-primary ms-2">Fix</span>';
+      
+      let typeBadge, actionLabel, changeDisplay;
+      
+      if (fixType === 'delete') {
+        typeBadge = '<span class="badge bg-danger ms-2"><i class="fas fa-trash me-1"></i>Delete</span>';
+        actionLabel = 'Deleted phrases:';
+        changeDisplay = '';
+      } else if (fixType === 'augment') {
+        typeBadge = '<span class="badge bg-success ms-2">Augment</span>';
+        actionLabel = 'Augmented to:';
+        changeDisplay = `
+          <div class="d-flex w-100 justify-content-between">
+            <h6 class="mb-1">
+              <span class="text-muted">${actionLabel}</span>
+              <code class="bg-warning text-black px-2 py-1 rounded">${fix1}</code> 
+              ↔
+              <code class="bg-warning text-black px-2 py-1 rounded">${fix2}</code>
+            </h6>
+            <div class="text-end">
+               <span class="badge bg-secondary mt-1">${entry.percentage || 100}%</span>
+            </div>
+          </div>
+        `;
+      } else {
+        typeBadge = '<span class="badge bg-primary ms-2">Fix</span>';
+        actionLabel = 'Fixed to:';
+        changeDisplay = `
+          <div class="d-flex w-100 justify-content-between">
+            <h6 class="mb-1">
+              <span class="text-muted">${actionLabel}</span>
+              <code class="bg-warning text-black px-2 py-1 rounded">${fix1}</code> 
+              ↔
+              <code class="bg-warning text-black px-2 py-1 rounded">${fix2}</code>
+            </h6>
+            <div class="text-end">
+               <span class="badge bg-secondary mt-1">${entry.percentage || 100}%</span>
+            </div>
+          </div>
+        `;
+      }
       
       const item = document.createElement("div");
       item.className = "list-group-item list-group-item-action";
@@ -103,26 +140,18 @@ export async function renderHistory(projectId) {
           </div>
         </div>
         <div class="d-flex w-100 justify-content-between">
-          <h6 class="mb-1"><span class="text-muted">Original:</span>
+          <h6 class="mb-1"><span class="text-muted">${fixType === 'delete' ? 'Deleted phrases:' : 'Original:'}</span>
           <code class="bg-light px-2 py-1 rounded">${entry.src_phrase}</code> 
           ↔ 
           <code class="bg-light px-2 py-1 rounded">${entry.tgt_phrase}</code>     
           </h6>
           <div class="text-end">
-            <span class="badge bg-primary mt-1">${entry.num_occurrences || 1} occurrences</span>
+            <span class="badge ${fixType === 'delete' ? 'bg-danger' : 'bg-primary'} mt-1">
+              ${fixType === 'delete' ? `${entry.num_occurrences || 1} sentences deleted` : `${entry.num_occurrences || 1} occurrences`}
+            </span>
           </div>
         </div>
-        <div class="d-flex w-100 justify-content-between">
-          <h6 class="mb-1">
-            <span class="text-muted">${fixType === 'augment' ? 'Augmented to:' : 'Fixed to:'}</span>
-            <code class="bg-warning text-black px-2 py-1 rounded">${fix1}</code> 
-            ↔
-            <code class="bg-warning text-black px-2 py-1 rounded">${fix2}</code>
-          </h6>
-          <div class="text-end">
-             <span class="badge bg-secondary mt-1">${entry.percentage || 100}%</span>
-          </div>
-        </div>
+        ${changeDisplay}
       `;
       historyList.appendChild(item);
     });
