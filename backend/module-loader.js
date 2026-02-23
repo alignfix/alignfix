@@ -33,10 +33,13 @@ function detectHardwareCapabilities() {
 function selectOptimalConfig(cores, memory) {
     // Define available configurations (pool_size, max_memory_gb)
     const configs = [
-        { poolSize: 16, memoryGB: 16, suffix: '_p16', minCores: 9,  minMemory: 8 },
-        { poolSize: 8,  memoryGB: 8,  suffix: '_p8',  minCores: 5,  minMemory: 4 },
-        { poolSize: 4,  memoryGB: 4,  suffix: '_p4',  minCores: 2,  minMemory: 2 },
-        { poolSize: 1,  memoryGB: 2,  suffix: '_p1',  minCores: 1,  minMemory: 1 }
+        { poolSize: 32, memoryGB: 16, suffix: '_p32_16GB', minCores: 32, minMemory: 16 },
+        { poolSize: 16, memoryGB: 16, suffix: '_p16_16GB', minCores: 16, minMemory: 16 },
+        { poolSize: 16, memoryGB: 8,  suffix: '_p16_8GB',  minCores: 16, minMemory: 8 },
+        { poolSize: 8,  memoryGB: 8,  suffix: '_p8_8GB',   minCores: 8,  minMemory: 8 },
+        { poolSize: 8,  memoryGB: 4,  suffix: '_p8_4GB',   minCores: 8,  minMemory: 4 },
+        { poolSize: 4,  memoryGB: 4,  suffix: '_p4_4GB',   minCores: 4,  minMemory: 4 },
+        { poolSize: 1,  memoryGB: 2,  suffix: '_p1_2GB',   minCores: 1,  minMemory: 1 }
     ];
     
     // Find the best matching configuration
