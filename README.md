@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="ui/img/alignfix-logo.png" alt="AlignFix Logo" width="220"/>
+  <img src="ui/img/alignfix-logo.png" alt="AlignFix Logo" width="120"/>
   
   # AlignFix
 
@@ -7,6 +7,10 @@
   [![WebAssembly](https://img.shields.io/badge/WebAssembly-654FF0?logo=webassembly&logoColor=white)](https://webassembly.org/)
   [![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white)](https://www.python.org/)
   [![Bootstrap](https://img.shields.io/badge/Bootstrap-5-7952B3?logo=bootstrap&logoColor=white)](https://getbootstrap.com/)
+
+  **[🚀 Try Live Demo](https://ifi-alignfix.uibk.ac.at/)**
+
+  <img src=".github/alignfix.gif" alt="AlignFix Demo" width="800"/>
 </div>
 
 **AlignFix** is a browser-based tool for augmenting and refining parallel text corpora. Built entirely with WebAssembly (WASM), it provides desktop-class performance for word alignment, phrase extraction, and quality assessment—all running 100% locally in your browser with complete privacy.
@@ -28,6 +32,10 @@
 - Duplicate texts with replacements
 
 ## 🚀 Quick Start
+
+**Try the live demo:** [https://ifi-alignfix.uibk.ac.at/](https://ifi-alignfix.uibk.ac.at/)
+
+Or run it locally:
 
 ### Prerequisites
 - Modern web browser (Chrome 90+, Edge 90+, Firefox 88+, or Safari 14+)
