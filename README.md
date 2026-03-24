@@ -159,6 +159,29 @@ This project is licensed under the Apache 2.0 License - see the [LICENSE](LICENS
 - **Bootstrap** - For the UI framework
 - **Chart.js** - For data visualization
 
+## 📚 Citation
+
+If you use AlignFix in your research, please cite:
+
+```bibtex
+@inproceedings{frontull-haller-seeber-2026-alignfix,
+    title = "{A}lign{F}ix: A Tool for Parallel Corpora Augmentation and Refinement",
+    author = "Frontull, Samuel  and
+      Haller-Seeber, Simon",
+    editor = "Croce, Danilo  and
+      Leidner, Jochen  and
+      Moosavi, Nafise Sadat",
+    booktitle = "Proceedings of the 19th Conference of the {E}uropean Chapter of the {A}ssociation for {C}omputational {L}inguistics (Volume 3: System Demonstrations)",
+    month = mar,
+    year = "2026",
+    address = "Rabat, Marocco",
+    publisher = "Association for Computational Linguistics",
+    url = "https://aclanthology.org/2026.eacl-demo.17/",
+    pages = "215--224",
+    ISBN = "979-8-89176-382-1"
+}
+```
+
 ## 📞 Support
 
 For questions, issues, or feature requests, please [open an issue](https://github.com/alignfix/alignfix/issues) on GitHub.
