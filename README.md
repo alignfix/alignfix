@@ -86,10 +86,13 @@ bash compile_all_configs.sh
 ```
 
 This generates optimized builds for different hardware:
-- `_p1`: 1 thread, 2GB memory (minimal)
-- `_p4`: 4 threads, 4GB memory (low)
-- `_p8`: 8 threads, 8GB memory (medium)
-- `_p16`: 16 threads, 16GB memory (high)
+- `_p1_2GB`: 1 thread, 2GB memory (minimal)
+- `_p4_4GB`: 4 threads, 4GB memory (low)
+- `_p8_4GB`: 8 threads, 4GB memory (medium-low)
+- `_p8_8GB`: 8 threads, 8GB memory (medium)
+- `_p16_8GB`: 16 threads, 8GB memory (medium-high)
+- `_p16_16GB`: 16 threads, 16GB memory (high)
+- `_p32_16GB`: 32 threads, 16GB memory (very high)
 
 #### Compile specific configuration:
 ```bash
