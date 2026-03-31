@@ -186,7 +186,7 @@ export async function tokeniseLines(inputLines) {
   });
   console.log('✓ WASM module initialized successfully');
 
-  const CHUNK_SIZE = getTextTokeniseChunkSize(numCores);
+  const CHUNK_SIZE = getTextTokeniseChunkSize(poolSize);
   const totalChunks = Math.ceil(inputLines.length / CHUNK_SIZE);
 
   let resultLines = [];
