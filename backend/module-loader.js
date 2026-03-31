@@ -36,6 +36,7 @@ function selectOptimalConfig(cores, memory) {
         { poolSize: 32, memoryGB: 16, suffix: '_p32_16GB', minCores: 32, minMemory: 16 },
         { poolSize: 16, memoryGB: 16, suffix: '_p16_16GB', minCores: 16, minMemory: 16 },
         { poolSize: 16, memoryGB: 8,  suffix: '_p16_8GB',  minCores: 16, minMemory: 8 },
+        { poolSize: 16, memoryGB: 4,  suffix: '_p16_4GB',  minCores: 16, minMemory: 4 },
         { poolSize: 8,  memoryGB: 8,  suffix: '_p8_8GB',   minCores: 8,  minMemory: 8 },
         { poolSize: 8,  memoryGB: 4,  suffix: '_p8_4GB',   minCores: 8,  minMemory: 4 },
         { poolSize: 4,  memoryGB: 4,  suffix: '_p4_4GB',   minCores: 4,  minMemory: 4 },

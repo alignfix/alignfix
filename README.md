@@ -76,6 +76,30 @@ Or run it locally:
 - Python 3.x
 - Bash shell
 
+> Note: To compile the bundled C/C++ code to WebAssembly you must install the Emscripten SDK (emsdk) so that the emcc compiler is available on your PATH. The official emsdk repository to clone is https://github.com/emscripten-core/emsdk.
+
+Quick emsdk install (example):
+
+```bash
+# clone the emsdk repository
+git clone https://github.com/emscripten-core/emsdk.git
+cd emsdk
+
+# fetch the latest SDK tools
+./emsdk install latest
+
+# activate the SDK for the current user
+./emsdk activate latest
+
+# Add emsdk to your PATH for the current shell session (echoing the recommended command)
+source ./emsdk_env.sh
+
+# Verify emcc is available
+emcc --version
+```
+
+If you prefer to install emscripten via your package manager, ensure the provided emcc is compatible with the project and available on PATH. If `./compile.sh` prints "emcc: command not found", the shell running the script does not have emcc on PATH — source `emsdk_env.sh` (or add the emsdk path to your shell profile) before running the compile scripts.
+
 ### Compile WebAssembly Modules
 
 The project includes pre-compiled WASM modules, but you can recompile them:
@@ -90,6 +114,7 @@ This generates optimized builds for different hardware:
 - `_p4_4GB`: 4 threads, 4GB memory (low)
 - `_p8_4GB`: 8 threads, 4GB memory (medium-low)
 - `_p8_8GB`: 8 threads, 8GB memory (medium)
+- `_p16_4GB`: 16 threads, 4GB memory (medium-low)
 - `_p16_8GB`: 16 threads, 8GB memory (medium-high)
 - `_p16_16GB`: 16 threads, 16GB memory (high)
 - `_p32_16GB`: 32 threads, 16GB memory (very high)
