@@ -186,7 +186,7 @@ This project is licensed under the Apache 2.0 License - see the [LICENSE](LICENS
 
 ## 📚 Citation
 
-If you use AlignFix in your research, please cite:
+If you use AlignFix in your research, please cite our [demo paper](https://aclanthology.org/2026.eacl-demo.17/):
 
 ```bibtex
 @inproceedings{frontull-haller-seeber-2026-alignfix,
