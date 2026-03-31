@@ -6,7 +6,6 @@ import json
 
 from text import tokenise, detokenise, highlight_tokens
 from alignment import parse_alignment
-from fixes import save_deletion
 from phrases import get_directed_phrases_from_texts_and_alignment, get_phrase_occurrences
 from db import get_db
 
@@ -261,6 +260,20 @@ def delete_translation(row_id):
     conn, cursor = get_db()
     cursor.execute("UPDATE alignments SET deleted_at=CURRENT_TIMESTAMP WHERE row_id=?", (row_id,))
     conn.commit()
+
+def save_deletion(project_id, src_phrase, tgt_phrase, direction, num_deleted):
+    """Save a deletion action to the history/fixes table"""
+    conn, cursor = get_db()
+    
+    print(f"Saving deletion to history: {num_deleted} sentences deleted for phrase pair [{src_phrase}] <-> [{tgt_phrase}]")
+    
+    cursor.execute("""
+        INSERT INTO fixes (src_phrase, tgt_phrase, src_fix, tgt_fix, direction, num_occurrences, percentage, type, project_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    """, (src_phrase, tgt_phrase, "", "", direction, num_deleted, 100, "delete", project_id))
+    
+    conn.commit()
+    print(f"Deletion saved to history")
 
 def delete_translations_by_phrase_pair(project_id, phrase1, phrase2, direction):
     """Delete all translations containing the specified phrase(s) and clean up occurrences
