@@ -470,56 +470,36 @@ def get_phrase_occurrences(project_id, phrase1_tok_str, phrase2_tok_str, directi
     return [row[0] for row in rows], total_count
 
 def fetch_phrases(project_id, start, length, search_value, direction=0, min_length=1):
-
+    """
+    One page of the phrase table (most frequent first). min_length is accepted
+    for compatibility; the extraction already applied the length limits.
+    """
     _, cursor = get_db()
 
     ignore = 0  # only fetch non-ignored phrases
-    # 1) Count total rows for this project (before LIMIT/OFFSET), excluding phrases with 0 occurrences
-    cursor.execute("SELECT COUNT(*) FROM phrases WHERE project_id=? AND ignore=? AND direction=? AND num_occurrences > 0 AND (LENGTH(src_phrase) - LENGTH(REPLACE(src_phrase, ' ', '')) = ? OR LENGTH(tgt_phrase) - LENGTH(REPLACE(tgt_phrase, ' ', '')) = ?)", (project_id, ignore, direction, min_length - 1, min_length - 1))
+    base = "FROM phrases WHERE project_id=? AND ignore=? AND direction=? AND num_occurrences > 0"
+    params = [project_id, ignore, direction]
+
+    # Total rows (the count must use the same conditions as the page query, or
+    # the table shows wrong totals and stops paging early)
+    cursor.execute(f"SELECT COUNT(*) {base}", params)
     total_records = cursor.fetchone()[0]
 
-    # 2) Apply optional filtering
     if search_value:
-
         search_value_tok_str = tokenise(search_value, as_string=True)
         like = f"%{search_value_tok_str}%"
-
-        print(f"Filtering phrases with search term: {search_value_tok_str}")
-
-        cursor.execute("""SELECT COUNT(*) 
-                     FROM phrases
-                     WHERE project_id=? 
-                     AND ignore=?
-                     AND num_occurrences > 0
-                     AND (src_phrase LIKE ? OR tgt_phrase LIKE ?)""",
-                  (project_id, ignore, like, like))
+        base += " AND (src_phrase LIKE ? OR tgt_phrase LIKE ?)"
+        params += [like, like]
+        cursor.execute(f"SELECT COUNT(*) {base}", params)
         filtered_records = cursor.fetchone()[0]
-
-        query = """SELECT id, src_phrase, tgt_phrase, direction, num_occurrences
-                   FROM phrases
-                   WHERE project_id=? 
-                   AND ignore=?
-                   AND num_occurrences > 0
-                   AND (src_phrase LIKE ? OR tgt_phrase LIKE ?)
-                   ORDER BY num_occurrences DESC 
-                   LIMIT ? OFFSET ?"""
-        cursor.execute(query, (project_id, ignore, like, like, length, start))
     else:
-        # no filtering
         filtered_records = total_records
-        query = """SELECT id, src_phrase, tgt_phrase, direction, num_occurrences
-                   FROM phrases
-                   WHERE project_id=?
-                   AND ignore=?
-                   AND direction=?
-                   AND num_occurrences > 0
-                   ORDER BY num_occurrences DESC 
-                   LIMIT ? OFFSET ?"""
-        cursor.execute(query, (project_id, ignore, direction, length, start))
-        # cursor.execute(query, (project_id, ignore, direction, min_length - 1, min_length - 1, length, start))
 
-                #    AND (LENGTH(src_phrase) - LENGTH(REPLACE(src_phrase, ' ', '')) = ?
-                #    OR LENGTH(tgt_phrase) - LENGTH(REPLACE(tgt_phrase, ' ', '')) = ?)
+    cursor.execute(
+        f"SELECT id, src_phrase, tgt_phrase, direction, num_occurrences {base} "
+        "ORDER BY num_occurrences DESC, id LIMIT ? OFFSET ?",
+        params + [length, start],
+    )
     phrases = cursor.fetchall()
 
     phrase_ids = [row[0] for row in phrases]

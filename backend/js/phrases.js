@@ -534,18 +534,17 @@ export async function fetchPhrases(data) {
 
   const pyodide = await initPyodide();
 
+  // values go through globals: the search text is user input and must not
+  // become part of the Python source
+  pyodide.globals.set("fp_args", pyodide.toPy([
+      parseInt(data.project_id), parseInt(data.start) || 0, parseInt(data.length) || 10,
+      data.search?.value || '', parseInt(data.direction) || 0, parseInt(data.min_phrase_len) || 1,
+  ]));
   const response = await pyodide.runPythonAsync(`
       import json
       from phrases import fetch_phrases
 
-      ids, src_phrases, tgt_phrases, directions, num_occurrences, total_records, filtered_records = fetch_phrases(
-          ${data.project_id}, 
-          ${data.start}, 
-          ${data.length}, 
-          """${data.search.value  || ''}""",
-          ${data.direction || 0},
-          ${data.min_phrase_len || 1}
-      )
+      ids, src_phrases, tgt_phrases, directions, num_occurrences, total_records, filtered_records = fetch_phrases(*fp_args)
       json.dumps({
           "ids": ids,
           "src_phrases": src_phrases,
