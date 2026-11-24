@@ -129,7 +129,8 @@ void free_token_list(TokenList tl)
 int parse_alignments(char *line, int reverse_direction, Alignment *alignments)
 {
     int count = 0;
-    char *token = strtok(line, " \t\n");
+    char *saveptr = NULL;  // strtok_r: strtok's global state is not thread-safe
+    char *token = strtok_r(line, " \t\n", &saveptr);
     while (token && count < MAX_ALIGNMENTS_PER_LINE)
     {
         int s, t;
@@ -145,7 +146,7 @@ int parse_alignments(char *line, int reverse_direction, Alignment *alignments)
             }
             count++;
         }
-        token = strtok(NULL, " \t\n");
+        token = strtok_r(NULL, " \t\n", &saveptr);
     }
     return count;
 }
