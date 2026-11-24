@@ -405,8 +405,10 @@ export async function renderScores(projectId) {
         <em>perplexity</em>, <em>BLEU</em>, or any custom measure.
       </p>
       <p>
-        When extracting phrases, translations with <strong>low scores</strong> can be ignored to 
-        focus on <strong>higher-quality data</strong> and reduce the number of phrases to review.
+        <strong>Low scores mark translations worth reviewing.</strong> When extracting phrases, the
+        score threshold collects only phrase pairs that occur <em>exclusively</em> in sentences scoring
+        below it: pairs that also occur in a higher-scoring sentence are treated as trusted, which
+        reduces the number of phrases to review.
       </p>
       <p>
         <strong>"Translation Difficulty"</strong> estimates how
