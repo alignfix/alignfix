@@ -697,19 +697,18 @@ extern "C"
             char *ignore_line;
             while ((ignore_line = read_line(input_ignore_file)) != NULL)
             {
-                // Parse the ignore line into src and tgt phrases
-                char *src_phrase = strtok(ignore_line, "|||");
-                char *tgt_phrase = strtok(NULL, "|||");
-
-                // strip newline from tgt_phrase
-                if (tgt_phrase) {
-                    size_t len = strlen(tgt_phrase);
-                    if (len > 0 && tgt_phrase[len - 1] == '\n') {
-                        tgt_phrase[len - 1] = '\0';
-                    }
+                // Parse "src_phrase|||tgt_phrase". Split on the whole "|||"
+                // separator: strtok(line, "|||") split on every single '|',
+                // which broke phrases containing '|'.
+                char *src_phrase = ignore_line;
+                char *tgt_phrase = NULL;
+                char *separator = strstr(ignore_line, "|||");
+                if (separator) {
+                    *separator = '\0';
+                    tgt_phrase = separator + 3;
                 }
 
-                if (src_phrase && tgt_phrase)
+                if (tgt_phrase)
                 {
                     // Insert into hash set for O(1) lookup
                     phrases_to_ignore->insert({std::string(src_phrase), std::string(tgt_phrase)});
