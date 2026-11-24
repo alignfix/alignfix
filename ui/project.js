@@ -668,20 +668,21 @@ export async function renderProject(id) {
   });
   
   // Attach handlers every time the table draws
+  const projectId = id;
   translationsTable.on('draw', () => {
     document.querySelectorAll('.store-translation-btn').forEach(btn => {
-      const id = btn.dataset.id;
+      const rowId = btn.dataset.id;
       bindAsyncButton(
         btn,
-        () => storeTranslationBtn(id),
+        () => storeTranslationBtn(projectId, rowId),
         ""
       );
     });
     document.querySelectorAll('.remove-translation-btn').forEach(btn => {
-      const id = btn.dataset.id;
+      const rowId = btn.dataset.id;
       bindAsyncButton(
         btn,
-        () => removeTranslationBtn(id),
+        () => removeTranslationBtn(projectId, rowId),
         ""
       );
     });
@@ -839,13 +840,13 @@ function getPhraseInput() {
   };
 }
 
-function storeTranslationBtn(row_id) {
+async function storeTranslationBtn(project_id, row_id) {
   const line1 = $(`#translation-src-${row_id}`).text();
   const line2 = $(`#translation-tgt-${row_id}`).text();
-  storeTranslation(row_id, line1, line2);
+  await storeTranslation(project_id, row_id, line1, line2);
 }
 
-async function removeTranslationBtn(row_id) {
+async function removeTranslationBtn(project_id, row_id) {
   // ask alert to confirm
   const result = await showDeleteConfirm(
     "Are you sure you want to remove this translation?",
@@ -856,7 +857,7 @@ async function removeTranslationBtn(row_id) {
   }
 
   // store empty translation
-  await deleteTranslation(row_id);
+  await deleteTranslation(project_id, row_id);
   // redraw table
   $('#translations-table').DataTable().ajax.reload(null, false); // false to stay on current page
 }

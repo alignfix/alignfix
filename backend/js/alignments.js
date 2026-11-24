@@ -57,17 +57,18 @@ export async function fetchTranslations(data) {
   };
 }
 
-export async function storeTranslation(id, line1, line2) {
+export async function storeTranslation(projectId, id, line1, line2) {
 
   const pyodide = await initPyodide();
 
-  pyodide.globals.set("id", id);
+  pyodide.globals.set("project_id", parseInt(projectId));
+  pyodide.globals.set("id", parseInt(id));
   pyodide.globals.set("line1", line1);
   pyodide.globals.set("line2", line2);
 
   await pyodide.runPythonAsync(`
       from projects import update_translation
-      update_translation(id, line1, line2)
+      update_translation(project_id, id, line1, line2)
   `);
 
   await safeSyncfs(pyodide);
@@ -76,15 +77,16 @@ export async function storeTranslation(id, line1, line2) {
   return;
 }
 
-export async function deleteTranslation(id) {
+export async function deleteTranslation(projectId, id) {
 
   const pyodide = await initPyodide();
 
-  pyodide.globals.set("id", id);
+  pyodide.globals.set("project_id", parseInt(projectId));
+  pyodide.globals.set("id", parseInt(id));
 
   await pyodide.runPythonAsync(`
       from projects import delete_translation
-      delete_translation(id)
+      delete_translation(project_id, id)
   `);
 
   await safeSyncfs(pyodide);

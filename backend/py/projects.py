@@ -240,41 +240,52 @@ def get_project_data_for_alignments(project_id):
 
     return project_data
 
-def update_translation(row_id, line1, line2):
+def _recount_phrases(cursor, project_id, phrase_ids):
+    """Recount num_occurrences of the given phrases over non-deleted rows."""
+    for phrase_id in phrase_ids:
+        cursor.execute("""
+            UPDATE phrases
+            SET num_occurrences = (
+                SELECT COUNT(*)
+                FROM occurrences o
+                INNER JOIN alignments a ON o.row_id = a.row_id AND o.project_id = a.project_id
+                WHERE o.id_phrases = phrases.id
+                AND a.deleted_at IS NULL
+            )
+            WHERE id = ? AND project_id = ?
+        """, (phrase_id, project_id))
 
+
+def _phrases_of_row(cursor, project_id, row_id):
+    cursor.execute("SELECT DISTINCT id_phrases FROM occurrences WHERE project_id=? AND row_id=?",
+                   (project_id, row_id))
+    return [r[0] for r in cursor.fetchall()]
+
+
+def update_translation(project_id, row_id, line1, line2):
+    """
+    Replace the text of one sentence pair. Its phrase occurrences are removed
+    (the alignment no longer matches the edited text) and the counts of the
+    affected phrases are updated.
+    """
     line1 = tokenise(line1, as_string=True)
     line2 = tokenise(line2, as_string=True)
 
     conn, cursor = get_db()
-    # Mark translation as deleted
-    cursor.execute("UPDATE alignments SET line1=?, line2=? WHERE row_id=?", (line1, line2, row_id))
-
-    # Delete occurrences for this row_id
-    cursor.execute("DELETE FROM occurrences WHERE row_id=?", (row_id,))
-    
-    # Update num_occurrences for affected phrases, counting only non-deleted alignments
-    # Get the project_id first
-    cursor.execute("SELECT project_id FROM alignments WHERE row_id=?", (row_id,))
-    result = cursor.fetchone()
-    if result:
-        project_id = result[0]
-        cursor.execute("""
-            UPDATE phrases
-            SET num_occurrences = (
-                SELECT COUNT(*) 
-                FROM occurrences o
-                INNER JOIN alignments a ON o.row_id = a.row_id AND o.project_id = a.project_id
-                WHERE o.id_phrases = phrases.id 
-                AND a.deleted_at IS NULL
-            )
-            WHERE project_id = ?
-        """, (project_id,))
-
+    cursor.execute("UPDATE alignments SET line1=?, line2=? WHERE project_id=? AND row_id=?",
+                   (line1, line2, project_id, row_id))
+    affected = _phrases_of_row(cursor, project_id, row_id)
+    cursor.execute("DELETE FROM occurrences WHERE project_id=? AND row_id=?", (project_id, row_id))
+    _recount_phrases(cursor, project_id, affected)
     conn.commit()
 
-def delete_translation(row_id):
+
+def delete_translation(project_id, row_id):
+    """Mark one sentence pair as deleted and update the counts of its phrases."""
     conn, cursor = get_db()
-    cursor.execute("UPDATE alignments SET deleted_at=CURRENT_TIMESTAMP WHERE row_id=?", (row_id,))
+    cursor.execute("UPDATE alignments SET deleted_at=CURRENT_TIMESTAMP WHERE project_id=? AND row_id=?",
+                   (project_id, row_id))
+    _recount_phrases(cursor, project_id, _phrases_of_row(cursor, project_id, row_id))
     conn.commit()
 
 def save_deletion(project_id, src_phrase, tgt_phrase, direction, num_deleted):
