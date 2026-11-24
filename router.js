@@ -20,12 +20,13 @@ import { renderStats } from "./ui/stats.js";
 import { renderAbout } from "./ui/about.js";
 import { renderHistory } from "./ui/history.js";
 import { renderScores } from "./ui/scores.js";
+import { renderReview } from "./ui/review.js";
 import { getProject } from "./backend/js/projects.js";
 import { escapeHtml } from "./ui/utils.js";
 import { isBusy } from "./ui/activity.js";
 
-const projectPages = ["project", "stats", "history", "scores"];
-const pageTitles = { project: "Phrases", stats: "Stats", history: "History", scores: "Scores" };
+const projectPages = ["project", "review", "scores", "history", "stats"];
+const pageTitles = { project: "Phrases", review: "Review", stats: "Stats", history: "History", scores: "Scores" };
 
 function resetContent() {
   document.getElementById("app").innerHTML = "";
@@ -84,8 +85,17 @@ export async function router() {
   const app = document.getElementById("app") || document.body;
   const sidebar = document.getElementById("sidebar-content") || null;
 
-  const page = route.split("-")[0];
-  const projectId = route.split("-")[1];
+  // "#page-<projectId>?key=value": the query passes e.g. a phrase to search for
+  const [path, query = ""] = route.split("?");
+  const params = new URLSearchParams(query);
+  const page = path.split("-")[0];
+  const projectId = path.split("-")[1];
+  if (page !== "#home" && page !== "#about" && projectPages.includes(page.slice(1)) && !/^\d+$/.test(projectId || "")) {
+    setActiveNav(null);
+    app.innerHTML = `<div class="empty-state"><i class="fas fa-map-signs"></i><h5>No such project</h5>
+      <p><a href="#home">Go to your projects</a>.</p></div>`;
+    return;
+  }
   // while an operation runs the title shows its progress
   if (!isBusy()) document.title = "AlignFix";
 
@@ -97,7 +107,7 @@ export async function router() {
         break;
       case "#project":
         updateNav(projectId, "project");
-        await renderProject(projectId);
+        await renderProject(projectId, params);
         break;
       case "#stats":
         updateNav(projectId, "stats");
@@ -106,6 +116,10 @@ export async function router() {
       case "#history":
         updateNav(projectId, "history");
         await renderHistory(projectId);
+        break;
+      case "#review":
+        updateNav(projectId, "review");
+        await renderReview(projectId, params);
         break;
       case "#scores":
         updateNav(projectId, "scores");

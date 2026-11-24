@@ -52,7 +52,7 @@ function escapeForHtmlAttr(str) {
     .replace(/\r?\n/g, '\\n');
 }
 
-export async function renderProject(id) {
+export async function renderProject(id, params = new URLSearchParams()) {
   const app = document.getElementById("app");
 
   if (fixesProjectId !== String(id)) {
@@ -762,6 +762,12 @@ export async function renderProject(id) {
 
   // pending edits kept from an earlier visit of this project
   updateFixesList();
+
+  // opened with a phrase to look at (e.g. from the Review page)
+  if (params.get("src") || params.get("tgt")) {
+    showTranslations(params.get("src") || "", params.get("tgt") || "", params.get("direction") || "0");
+    document.getElementById("translations-table")?.scrollIntoView({ block: "start" });
+  }
 }
 
 function showTranslations(phrase1, phrase2, direction, fix1 = '', fix2 = '') {
