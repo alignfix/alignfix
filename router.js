@@ -20,60 +20,64 @@ import { renderStats } from "./ui/stats.js";
 import { renderAbout } from "./ui/about.js";
 import { renderHistory } from "./ui/history.js";
 import { renderScores } from "./ui/scores.js";
+import { getProject } from "./backend/js/projects.js";
+import { escapeHtml } from "./ui/utils.js";
+import { isBusy } from "./ui/activity.js";
 
 const projectPages = ["project", "stats", "history", "scores"];
+const pageTitles = { project: "Phrases", stats: "Stats", history: "History", scores: "Scores" };
 
 function resetContent() {
-  const app = document.getElementById("app");
-  app.innerHTML = ""; // clear content
-
-  const sidebar = document.getElementById("sidebar-content");
-  sidebar.innerHTML = "";
+  document.getElementById("app").innerHTML = "";
+  document.getElementById("sidebar-content").innerHTML = "";
 }
 
+function setActive(item, active) {
+  item.classList.toggle("active", active);
+  const link = item.querySelector("a");
+  if (link) {
+    if (active) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  }
+}
+
+/** Navigation for a page outside of a project (home, about). */
 function setActiveNav(page) {
-
-  for (const p of projectPages.concat(["home", "about"])) {
-    const pageNavItem = document.getElementById(p);
-    if (p == page) {
-      pageNavItem.classList.add("active");
-    } else {
-      pageNavItem.classList.remove("active");
-    }
-
-    if (page == "home" && p in projectPages) {
-      pageNavItem.style.display = "none";
-    }
+  for (const p of projectPages) {
+    const item = document.getElementById(p);
+    item.style.display = "none";
+    setActive(item, false);
   }
-
+  document.getElementById("project-name-nav").classList.add("d-none");
+  for (const p of ["home", "about"]) setActive(document.getElementById(p), p === page);
 }
 
-function updateNav(projectId, activePage=null) {
-
-  setActiveNav(null);
-  
+/** Navigation for a page of a project. */
+async function updateNav(projectId, activePage) {
+  for (const p of ["home", "about"]) setActive(document.getElementById(p), false);
   for (const page of projectPages) {
-    const pageNavItem = document.getElementById(page);
-      if (pageNavItem) {
-        
-        if (activePage === page) {
-          pageNavItem.classList.add("active");
-        } else {
-          pageNavItem.classList.remove("active");
-        }
-
-        pageNavItem.style.display = "block";
-        const pageLink = pageNavItem.querySelector("a");
-        if (pageLink) {
-          pageLink.href = `#${page}-${projectId}`;
-          pageLink.textContent = `${page.charAt(0).toUpperCase() + page.slice(1)}`;
-        }
-      }
+    const item = document.getElementById(page);
+    item.style.display = "block";
+    setActive(item, page === activePage);
+    const link = item.querySelector("a");
+    link.href = `#${page}-${projectId}`;
+    link.textContent = pageTitles[page];
   }
+
+  const nameItem = document.getElementById("project-name-nav");
+  const label = document.getElementById("project-name-label");
+  nameItem.classList.remove("d-none");
+  label.textContent = "";
+  try {
+    const project = await getProject(projectId);
+    label.textContent = project?.name || `Project ${projectId}`;
+  } catch (e) {
+    label.textContent = `Project ${projectId}`;
+  }
+  document.title = `${label.textContent} · ${pageTitles[activePage]} · AlignFix`;
 }
 
-export function router() {
-  
+export async function router() {
   resetContent();
 
   const route = window.location.hash || "#home";
@@ -82,35 +86,53 @@ export function router() {
 
   const page = route.split("-")[0];
   const projectId = route.split("-")[1];
+  // while an operation runs the title shows its progress
+  if (!isBusy()) document.title = "AlignFix";
 
-  switch (page) {
-    case "#home":
-      setActiveNav("home");
-      renderHome(app);
-      break;
-    case "#project":
-      updateNav(projectId, "project");
-      renderProject(projectId);
-      break;
-    case "#stats":
-      updateNav(projectId, "stats");
-      renderStats(projectId, true);
-      break;
-    case "#history":
-      updateNav(projectId, "history");
-      renderHistory(projectId);
-      break;
-    case "#scores":
-      updateNav(projectId, "scores");
-      renderScores(projectId);
-      break;
-    case "#about":
-      setActiveNav("about");
-      renderAbout(app, sidebar);
-      break;
-    default:
-      app.innerHTML = "<p>404 Not Found</p>" + route;
+  try {
+    switch (page) {
+      case "#home":
+        setActiveNav("home");
+        await renderHome(app);
+        break;
+      case "#project":
+        updateNav(projectId, "project");
+        await renderProject(projectId);
+        break;
+      case "#stats":
+        updateNav(projectId, "stats");
+        await renderStats(projectId, true);
+        break;
+      case "#history":
+        updateNav(projectId, "history");
+        await renderHistory(projectId);
+        break;
+      case "#scores":
+        updateNav(projectId, "scores");
+        await renderScores(projectId);
+        break;
+      case "#about":
+        setActiveNav("about");
+        await renderAbout(app, sidebar);
+        break;
+      default:
+        setActiveNav(null);
+        app.innerHTML = `
+          <div class="empty-state">
+            <i class="fas fa-map-signs"></i>
+            <h5>Page not found</h5>
+            <p><code>${escapeHtml(route)}</code> does not exist. <a href="#home">Go to your projects</a>.</p>
+          </div>`;
+    }
+  } catch (err) {
+    console.error(`Could not show ${route}:`, err);
+    app.innerHTML = `
+      <div class="alert alert-danger">
+        <h5 class="alert-heading"><i class="fas fa-circle-exclamation me-2"></i>This page could not be shown</h5>
+        <p class="mb-0">The logs (above) contain the details. <a href="#home">Back to your projects</a></p>
+      </div>`;
   }
+  window.scrollTo(0, 0);
 }
 
 // Listen to navigation changes

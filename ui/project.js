@@ -19,101 +19,16 @@ import { fetchTranslations, storeTranslation, deleteTranslation, deleteTranslati
 import { applyFixes } from "../backend/js/fixes.js";
 import { getProject, saveProject, downloadProject, mergeProjectStats } from "../backend/js/projects.js";
 import { recomputeAlignments } from "../backend/js/aligner.js";
-import { bindAsyncButton, escapeHtml } from "./utils.js";
+import { bindAsyncButton, escapeHtml, reportError } from "./utils.js";
 import { profiler } from "./profiler.js";
+import { runActivity, stage } from "./activity.js";
+import { showAlert, showDeleteConfirm, toast } from "./dialogs.js";
 
-let fixes = [];  // global list of fixes
-let ignored = [];
-
-// Custom modal dialog functions
-function showModal(title, message, type = 'info', buttons = []) {
-  return new Promise((resolve) => {
-    const modalId = 'customModal';
-    let existingModal = document.getElementById(modalId);
-    
-    if (existingModal) {
-      existingModal.remove();
-    }
-
-    const iconMap = {
-      'info': '<i class="fas fa-info-circle text-info"></i>',
-      'success': '<i class="fas fa-check-circle text-success"></i>',
-      'warning': '<i class="fas fa-exclamation-triangle text-warning"></i>',
-      'danger': '<i class="fas fa-exclamation-circle text-danger"></i>',
-      'question': '<i class="fas fa-question-circle text-primary"></i>'
-    };
-
-    const icon = iconMap[type] || iconMap['info'];
-
-    let buttonHtml = '';
-    if (buttons.length === 0) {
-      buttonHtml = '<button type="button" class="btn btn-primary" data-result="ok">OK</button>';
-    } else {
-      buttonHtml = buttons.map(btn => 
-        `<button type="button" class="btn btn-${btn.variant || 'secondary'}" data-result="${btn.value}">${btn.label}</button>`
-      ).join('');
-    }
-
-    const modalHtml = `
-      <div class="modal fade" id="${modalId}" tabindex="-1" aria-hidden="true" data-bs-backdrop="static">
-        <div class="modal-dialog modal-dialog-centered">
-          <div class="modal-content">
-            <div class="modal-header">
-              <h5 class="modal-title d-flex align-items-center gap-2">
-                ${icon}
-                <span>${escapeHtml(title)}</span>
-              </h5>
-              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-            </div>
-            <div class="modal-body">
-              <p style="white-space: pre-wrap;">${escapeHtml(message)}</p>
-            </div>
-            <div class="modal-footer">
-              ${buttonHtml}
-            </div>
-          </div>
-        </div>
-      </div>
-    `;
-
-    document.body.insertAdjacentHTML('beforeend', modalHtml);
-    const modalElement = document.getElementById(modalId);
-    const modal = new bootstrap.Modal(modalElement);
-
-    modalElement.querySelectorAll('[data-result]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const result = btn.dataset.result;
-        modal.hide();
-        resolve(result);
-      });
-    });
-
-    modalElement.addEventListener('hidden.bs.modal', () => {
-      modalElement.remove();
-      resolve(null);
-    });
-
-    modal.show();
-  });
-}
-
-function showAlert(message, title = 'Notice', type = 'info') {
-  return showModal(title, message, type);
-}
-
-function showConfirm(message, title = 'Confirm', type = 'question') {
-  return showModal(title, message, type, [
-    { label: 'Cancel', value: 'cancel', variant: 'secondary' },
-    { label: 'Confirm', value: 'confirm', variant: 'primary' }
-  ]);
-}
-
-function showDeleteConfirm(message, title = 'Delete Confirmation') {
-  return showModal(title, message, 'danger', [
-    { label: 'Cancel', value: 'cancel', variant: 'secondary' },
-    { label: 'Delete', value: 'delete', variant: 'danger' }
-  ]);
-}
+// Pending (not yet applied) fixes of the open project. They are kept while
+// switching between the pages of a project and dropped when another project
+// is opened, so they can never be applied to the wrong project.
+let fixes = [];
+let fixesProjectId = null;
 
 function getDirectionSymbol(direction) {
   switch (String(direction)) {
@@ -140,27 +55,29 @@ function escapeForHtmlAttr(str) {
 export async function renderProject(id) {
   const app = document.getElementById("app");
 
+  if (fixesProjectId !== String(id)) {
+    fixes = [];
+    fixesProjectId = String(id);
+  }
+
   const project = await getProject(id);
   const numCores = navigator.hardwareConcurrency || 1;
 
   app.innerHTML = `
-  <div class="d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between mb-2">
-    
-    <!-- Title + Input -->
-    <h1 class="mb-2 mb-md-0 d-flex align-items-center flex-grow-1">
-      <a href="#home"></a>
-      <input type="text" class="form-control" id="document_name" placeholder="Document Name" value="${escapeHtml(project.name)}" >
-    </h1>
-
-    <!-- Buttons -->
-    <div class="d-flex flex-wrap gap-2 mt-2 mt-md-0">
-      <button id="store-btn" class="btn btn-primary">
+  <div class="page-header project-header">
+    <div class="input-group project-name-group">
+      <label class="input-group-text" for="document_name" title="Project name"><i class="fas fa-pen"></i></label>
+      <input type="text" class="form-control form-control-lg" id="document_name" placeholder="Project name"
+             value="${escapeHtml(project.name)}" maxlength="200" aria-label="Project name">
+      <button id="store-btn" class="btn btn-outline-primary" type="button" title="Save the project name">
         <i class="fas fa-save"></i> Save
       </button>
-      <button id="apply-fixes-btn" class="btn btn-success">
-        <i class="fas fa-sync"></i> Apply Changes
+    </div>
+    <div class="d-flex flex-wrap gap-2">
+      <button id="apply-fixes-btn" class="btn btn-success" type="button" title="Apply the pending edits to the corpus">
+        <i class="fas fa-check-double"></i> Apply edits
       </button>
-      <button id="download-btn" class="btn btn-secondary">
+      <button id="download-btn" class="btn btn-outline-secondary" type="button" title="Download sentences, alignments and fixes as .zip">
         <i class="fas fa-download"></i> Download
       </button>
     </div>
@@ -213,7 +130,7 @@ export async function renderProject(id) {
           <!-- Fixes List -->
           <div class="p-2" id="fixes-container" style="max-height: 200px; overflow-y: auto;">
             <div class="text-center text-muted py-3">
-              <i class="fas fa-info-circle me-2"></i>No changes pefnding
+              <i class="fas fa-info-circle me-2"></i>No changes pending
             </div>
           </div>
         </div>
@@ -346,7 +263,7 @@ export async function renderProject(id) {
             <i class="fas fa-info-circle ms-1 text-muted" 
                data-bs-toggle="tooltip" 
                data-bs-placement="right"
-               title="Only phrase pairs occuring *only* in entries with scores below the threshold are collected."></i>
+               title="Only phrase pairs that occur exclusively in sentences scoring below the threshold are collected."></i>
           </label>
           <input type="number" class="form-control" id="threshold-input" min="0" max="10000" placeholder="threshold" value="${project.threshold}">
         </div>
@@ -387,7 +304,7 @@ export async function renderProject(id) {
           <button class="btn btn-primary" type="button" id="threshold-btn-soft">
             <i class="fas fa-refresh"></i> Extract phrases
           </button>
-          <button class="btn btn-warning type="button" id="threshold-btn-hard">
+          <button class="btn btn-warning" type="button" id="threshold-btn-hard">
             <i class="fas fa-arrows-left-right"></i> Realign sentences
           </button>
         </div>
@@ -395,33 +312,52 @@ export async function renderProject(id) {
     </div>
     `;
 
+  const extractAndStoreStats = async () => {
+    profiler.clear();
+    const extractStats = await profiler.measureAsync('extractPhrases', () => extractPhrases(id));
+    profiler.data = { ...profiler.data, ...(extractStats || {}) };
+    await mergeProjectStats(id, profiler.data);
+    return extractStats;
+  };
+  const phraseCount = (stats) => (stats?.total_phrases_filtered ?? 0).toLocaleString();
+
   bindAsyncButton(
     document.getElementById("threshold-btn-soft"),
     async () => {
-      profiler.clear();
-      const extractStats = await profiler.measureAsync('extractPhrases', () => extractPhrases(id));
-      profiler.data = { ...profiler.data, ...(extractStats || {}) };
-      mergeProjectStats(id, profiler.data);
+      const stats = await runActivity("Extracting phrases", extractAndStoreStats,
+        { done: (stats) => `Extracted ${phraseCount(stats)} phrase pairs` });
+      toast(`Extracted ${phraseCount(stats)} phrase pairs.`, "success");
       $('#phrases-table').DataTable().ajax.reload();
-    }
+    },
+    "Extracting…"
   );
 
   bindAsyncButton(
     document.getElementById("threshold-btn-hard"),
     async () => { 
-      await recomputeAlignments(id);
-      profiler.clear();
-      const extractStats = await profiler.measureAsync('extractPhrases', () => extractPhrases(id));
-      profiler.data = { ...profiler.data, ...(extractStats || {}) };
-      mergeProjectStats(id, profiler.data);
+      const stats = await runActivity("Realigning sentences", async () => {
+        await stage(0, 0.6, "", () => recomputeAlignments(id));
+        return stage(0.6, 1, "Extracting phrases", extractAndStoreStats);
+      }, { done: (stats) => `Realigned; ${phraseCount(stats)} phrase pairs` });
+      toast(`Realigned all sentences and extracted ${phraseCount(stats)} phrase pairs.`, "success");
       $('#phrases-table').DataTable().ajax.reload();
-    }
+      $('#translations-table').DataTable().ajax.reload(null, false);
+    },
+    "Realigning…"
   );
 
   bindAsyncButton(
     document.getElementById("store-btn"),
-    () => saveProject(id)
+    async () => {
+      await saveProject(id);
+      document.getElementById("project-name-label").textContent = document.getElementById("document_name").value;
+      toast("Project name saved.", "success", { delay: 2500 });
+    },
+    ""
   );
+  document.getElementById("document_name").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") document.getElementById("store-btn").click();
+  });
 
   // Update percentage display when slider value changes
   document.getElementById("fix-percentage").addEventListener("input", (event) => {
@@ -487,13 +423,12 @@ export async function renderProject(id) {
       }
       message += "\n\nThis action cannot be undone!";
       
-      const result = await showDeleteConfirm(message, "Delete Sentences");
-      if (result !== 'delete') {
+      if (!await showDeleteConfirm(message, "Delete sentences")) {
         return;
       }
       
       const deletedCount = await deleteTranslationsByPhrasePair(id, srcPhrase, tgtPhrase, input.direction);
-      await showAlert(`Successfully deleted ${deletedCount} sentence(s).`, "Deletion Complete", "success");
+      toast(`Deleted ${deletedCount.toLocaleString()} sentence pair(s).`, "success");
       phrasesTable.ajax.reload();
       translationsTable.ajax.reload();
     },
@@ -503,18 +438,23 @@ export async function renderProject(id) {
   function addChange(type) {
     const input = getPhraseInput();
     input.type = type;
-    // if input already in fixes, do not add
+    if (!input.src_phrase.trim() && !input.tgt_phrase.trim()) {
+      toast("Search for a phrase first (Phrase 1 and/or Phrase 2), then enter the replacement.", "warning");
+      return;
+    }
+    if (input.src_fix === input.src_phrase && input.tgt_fix === input.tgt_phrase) {
+      toast("The fix is identical to the phrase: change Fix 1 or Fix 2 first.", "warning");
+      return;
+    }
+    // one pending edit per phrase pair and kind: adding it again updates it
     const exists = fixes.find(f => 
       f.src_phrase === input.src_phrase && 
       f.tgt_phrase === input.tgt_phrase && 
-      f.src_fix === input.src_fix && 
-      f.tgt_fix === input.tgt_fix && 
-      f.direction === input.direction
+      f.direction === input.direction &&
+      f.type === input.type
     );
     if (exists) {
-      // change fix1 and fix2 to new values
-      exists.src_fix = input.src_fix;
-      exists.tgt_fix = input.tgt_fix;
+      Object.assign(exists, input);
     } else {
       fixes.push(input);
     }
@@ -550,12 +490,23 @@ export async function renderProject(id) {
   bindAsyncButton(
     document.getElementById("apply-fixes-btn"), 
     async () => {
-      await applyFixes(id, fixes);
+      if (fixes.length === 0) {
+        toast("There are no pending edits. Search for a phrase and use “Add Fix” or “Augment” first.", "info");
+        return;
+      }
+      const pending = fixes.slice();
+      const n = pending.length;
+      await runActivity(`Applying ${n} edit${n === 1 ? "" : "s"}`, () => applyFixes(id, pending),
+        { done: () => `Applied ${n} edit${n === 1 ? "" : "s"}` });
       fixes = [];
       clearSearch();
       updateFixesList();
+      toast(`Applied ${n} edit${n === 1 ? "" : "s"}. See History for details.`, "success",
+        { action: { label: "History", href: `#history-${id}` } });
       $('#phrases-table').DataTable().ajax.reload();
-    }
+      $('#translations-table').DataTable().ajax.reload(null, false);
+    },
+    "Applying…"
   );
 
   bindAsyncButton(
@@ -601,7 +552,7 @@ export async function renderProject(id) {
           });
 
           updateFixesList();
-          await showAlert(`Successfully imported ${importedFixes.length} fix(es).`, "Import Complete", "success");
+          toast(`Imported ${importedFixes.length} fix(es); apply them with “Apply edits”.`, "success");
         } catch (error) {
           console.error("Error parsing JSON:", error);
           await showAlert("Failed to parse the JSON file. Please ensure the file contains valid JSON.", "Import Error", "danger");
@@ -614,16 +565,15 @@ export async function renderProject(id) {
   document.getElementById("ignored-file-input").addEventListener("change", function(event) {
     const file = event.target.files[0]; 
     if (file) {
-      console.log("Selected file:", file.name);
-
-      const reader = new FileReader();
-      reader.onload = function(e) {
-        const content = e.target.result;
-        importIgnoredFromFile(id, content);
-        // reload ignored phrases table
-        ignoredTable.ajax.reload();
-      };
-      reader.readAsText(file);
+      file.text()
+        .then(content => importIgnoredFromFile(id, content))
+        .then(() => {
+          toast(`Imported hidden phrases from ${file.name}.`, "success");
+          ignoredTable.ajax.reload();
+          phrasesTable.ajax.reload(null, false);
+        })
+        .catch(reportError)
+        .finally(() => { event.target.value = ""; });
     }
   });
 
@@ -636,6 +586,7 @@ export async function renderProject(id) {
     scrollY: 800,
     paging: true,
     pageLength: 20,
+    lengthMenu: [10, 20, 50, 100],
     autoWidth: false,  // let columns take natural width
     ajax: async function (d, callback) {
       d.phrase1 = $('#fix-test1').val();
@@ -783,11 +734,11 @@ export async function renderProject(id) {
   bindAsyncButton(
     document.getElementById("delete-ignored-btn"), 
     async () => {
-      const result = await showDeleteConfirm(
-        "Are you sure you want to delete all ignored phrases?\n\nThis will remove all phrases from the ignore list.",
-        "Delete All Ignored Phrases"
+      const confirmed = await showDeleteConfirm(
+        "Show all hidden phrases again?\n\nThis empties the list of hidden phrases.",
+        "Unhide all phrases", "Unhide all"
       );
-      if (result !== 'delete') {
+      if (!confirmed) {
         return;
       }
       await deleteAllIgnoredPhrases(id);
@@ -795,15 +746,19 @@ export async function renderProject(id) {
       phrasesTable.ajax.reload(null, false);
     }
   );
+
+  // pending edits kept from an earlier visit of this project
+  updateFixesList();
 }
 
 function showTranslations(phrase1, phrase2, direction, fix1 = '', fix2 = '') {
 
-  let fix = fixes.find(f => f.phrase1 === phrase1 && f.phrase2 === phrase2 && f.direction === direction);
+  // a pending fix for this phrase pair: show its replacement
+  const fix = fixes.find(f => f.src_phrase === phrase1 && f.tgt_phrase === phrase2 && String(f.direction) === String(direction));
 
-  if (fix) {
-    fix1 = fix.fix1;
-    fix2 = fix.fix2;
+  if (fix && !fix1 && !fix2) {
+    fix1 = fix.src_fix;
+    fix2 = fix.tgt_fix;
   } else {
     fix1 = fix1 ? fix1 : phrase1;
     fix2 = fix2 ? fix2 : phrase2;
@@ -844,20 +799,22 @@ async function storeTranslationBtn(project_id, row_id) {
   const line1 = $(`#translation-src-${row_id}`).text();
   const line2 = $(`#translation-tgt-${row_id}`).text();
   await storeTranslation(project_id, row_id, line1, line2);
+  toast("Sentence pair saved.", "success", { delay: 2500 });
 }
 
 async function removeTranslationBtn(project_id, row_id) {
   // ask alert to confirm
-  const result = await showDeleteConfirm(
-    "Are you sure you want to remove this translation?",
-    "Remove Translation"
+  const confirmed = await showDeleteConfirm(
+    "Delete this sentence pair from the corpus?",
+    "Delete sentence pair"
   );
-  if (result !== 'delete') {
+  if (!confirmed) {
     return;
   }
 
   // store empty translation
   await deleteTranslation(project_id, row_id);
+  toast("Sentence pair deleted.", "success", { delay: 2500 });
   // redraw table
   $('#translations-table').DataTable().ajax.reload(null, false); // false to stay on current page
 }

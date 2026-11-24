@@ -17,7 +17,7 @@
 import { getProject } from "../backend/js/projects.js";
 import { countFixes } from "../backend/js/fixes.js";
 import { downloadBinaryProject } from "../backend/js/projects.js";
-import { bindAsyncButton, escapeHtml } from "./utils.js";
+import { bindAsyncButton, escapeHtml, parseDbDate } from "./utils.js";
 
 /**
  * renderStats(projectId)
@@ -54,21 +54,23 @@ export async function renderStats(projectId) {
   console.log(`Loading stats for project ${projectId}...`);
   // console.log(projectStats);
   
-  const name = `Project ${projectId} - ${project.name || 'no name'}`;
-  const created = project ? (project.created_at || '-') : (projectStats.created_at || '-');
+  const name = project.name || `Project ${projectId}`;
+  const createdDate = parseDbDate(project ? project.created_at : projectStats.created_at);
+  const created = createdDate ? createdDate.toLocaleString() : '-';
 
   // build polished layout
   app.innerHTML = `
-    <div class="py-3">
-      <div class="d-flex justify-content-between align-items-start mb-3">
+    <div>
+      <div class="page-header">
         <div>
-          <h2 class="mb-1">${escapeHtml(name)}</h2>
-          <div class="text-muted small">Created: ${escapeHtml(created)}</div>
+          <h1 class="page-title">Stats</h1>
+          <div class="text-muted small">Created ${escapeHtml(created)}</div>
         </div>
-        <div class="text-end">
-          <button id="download-binary" class="btn btn-primary"><i class="fas fa-file-archive me-2"></i> Download Project</button>
-          <button id="download-stats" class="btn btn-secondary">
-          <i class="fas fa-chart-line me-2"></i> Download Statistics</button>
+        <div class="d-flex flex-wrap gap-2">
+          <button id="download-binary" class="btn btn-primary" title="Export the whole project as an .algf file (can be imported again)">
+            <i class="fas fa-file-archive me-2"></i>Download Project</button>
+          <button id="download-stats" class="btn btn-outline-secondary">
+            <i class="fas fa-chart-line me-2"></i>Download Statistics</button>
         </div>
       </div>
 
@@ -395,11 +397,17 @@ export async function renderStats(projectId) {
     const row = document.createElement('tr');
     const entry = projectStats[key] && projectStats[key][0];
 
-    const displayName = key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase());
+    const PROFILE_LABELS = {
+      tokenize_src: 'Tokenizing source', tokenize_tgt: 'Tokenizing target',
+      compute_alignments: 'Aligning words', extract_phrases: 'Extracting phrases',
+      extractPhrases: 'Extracting phrases', load_alignments_py: 'Loading sentences',
+    };
+    const displayName = PROFILE_LABELS[key] ||
+      key.replace(/_/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').replace(/^./, str => str.toUpperCase());
 
     if (!entry) {
       row.innerHTML = `
-        <td><strong>${escapeHtml(displayName)}</strong><br><small class="text-muted">${escapeHtml(key)}</small></td>
+        <td><strong>${escapeHtml(displayName)}</strong></td>
         <td colspan="3" class="text-center text-muted"><i class="fas fa-info-circle"></i> No profiling data</td>
       `;
       profilerTableBody.appendChild(row);
@@ -422,7 +430,7 @@ export async function renderStats(projectId) {
 
     row.innerHTML = `
       <td>
-        <strong>${escapeHtml(displayName)}</strong><br><small class="text-muted">${escapeHtml(key)}</small>
+        <strong>${escapeHtml(displayName)}</strong>
       </td>
       <td class="text-end">${cpu.toFixed(2)}</td>
       <td class="text-end">${memDeltaMB !== null ? memDeltaMB.toFixed(3) : 'N/A'}</td>

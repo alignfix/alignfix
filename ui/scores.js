@@ -15,7 +15,9 @@
  */
 
 import { importScoresFromFile, assignAutoScores, assignStabilityScores, assignConsistencyScores, explainConsistency, getScores, getAlignmentsWithScores } from "../backend/js/scores.js";
-import { bindAsyncButton, escapeHtml } from "./utils.js";
+import { bindAsyncButton, escapeHtml, reportError } from "./utils.js";
+import { runActivity } from "./activity.js";
+import { toast } from "./dialogs.js";
 
 /**
  * renderScores(projectId)
@@ -34,17 +36,12 @@ export async function renderScores(projectId) {
   }
 
   app.innerHTML = `
-    <div class="py-4">
+    <div>
       <div class="row">
         <div class="col-12">
-          <div class="d-flex justify-content-between align-items-center mb-4">
-            <h1 class="mb-0">
-              <i class="fas fa-chart-bar text-primary me-2"></i>
-              Scores
-            </h1>
-            <div class="badge bg-secondary">
-              Project ${projectId}
-            </div>
+          <div class="page-header">
+            <h1 class="page-title">Scores</h1>
+            <span class="text-muted small">One score per sentence pair; low scores mark pairs worth reviewing.</span>
           </div>
         </div>
 
@@ -508,81 +505,44 @@ export async function renderScores(projectId) {
     }
   }
 
-  // File upload handler
+  // File upload handler: one score per line, in corpus order
   document.getElementById("scores-file-input").addEventListener("change", async function(event) {
-    const file = event.target.files[0]; 
-    if (file) {
-      console.log("Selected file:", file.name);
-
-      const reader = new FileReader();
-      reader.onload = async function(e) {
-        try {
-          const content = e.target.result;
-          
-          const scores = content.split('\n')
-            .map(line => line.trim())
-            .filter(line => line !== '')
-            .map(score => parseFloat(score))
-            .filter(score => !isNaN(score));
-
-          await importScoresFromFile(projectId, scores);
-          document.getElementById("scores-file-input").value = "";
-          
-          // Refresh the histogram and table
-          await plotScoresHistogram();
-          
-          // Show success message
-          const alertDiv = document.createElement('div');
-          alertDiv.className = 'alert alert-success alert-dismissible fade show mt-2';
-          alertDiv.innerHTML = `
-            <i class="fas fa-check me-2"></i>
-            Successfully imported ${scores.length} scores!
-            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-          `;
-          document.querySelector('.card-body').appendChild(alertDiv);
-          
-          console.log("Scores imported successfully");
-        } catch (error) {
-          console.error('Error importing scores:', error);
-          alert(`Error importing scores: ${error.message}`);
-        }
-      };
-      reader.readAsText(file);
+    const input = event.target;
+    const file = input.files[0];
+    if (!file) return;
+    try {
+      const lines = (await file.text()).split(/\r?\n/).map(line => line.trim()).filter(line => line !== '');
+      const count = await runActivity(`Importing scores from ${file.name}`, () => importScoresFromFile(projectId, lines),
+        { done: (n) => `Imported ${n.toLocaleString()} scores` });
+      toast(`Imported ${count.toLocaleString()} scores from ${file.name}.`, "success");
+      await plotScoresHistogram();
+      await loadAlignments();
+    } catch (error) {
+      reportError(error);
+    } finally {
+      input.value = "";
     }
   });
 
-  // Assign difficulty scores button
-  bindAsyncButton(
-    document.getElementById("assign-difficulty-scores-btn"),
-    async () => {
-      await assignAutoScores(projectId);
-      await plotScoresHistogram();
-      await loadAlignments();
-      console.log("Translation difficulty scores assigned successfully");
-    }
-  );
-
-  // Assign consistency scores button
-  bindAsyncButton(
-    document.getElementById("assign-consistency-scores-btn"),
-    async () => {
-      await assignConsistencyScores(projectId);
-      await plotScoresHistogram();
-      await loadAlignments();
-      console.log("Alignment consistency scores assigned successfully");
-    }
-  );
-
-  // Assign stability scores button
-  bindAsyncButton(
-    document.getElementById("assign-stability-scores-btn"),
-    async () => {
-      await assignStabilityScores(projectId);
-      await plotScoresHistogram();
-      await loadAlignments();
-      console.log("Alignment stability scores assigned successfully");
-    }
-  );
+  // Automatic scores: each runs as an activity with progress in the status bar
+  const autoScores = [
+    ["assign-difficulty-scores-btn", "Translation difficulty", assignAutoScores],
+    ["assign-consistency-scores-btn", "Alignment consistency", assignConsistencyScores],
+    ["assign-stability-scores-btn", "Alignment stability", assignStabilityScores],
+  ];
+  for (const [buttonId, name, assign] of autoScores) {
+    bindAsyncButton(
+      document.getElementById(buttonId),
+      async () => {
+        await runActivity(`Computing ${name.toLowerCase()} scores`, () => assign(projectId),
+          { done: () => `${name} scores assigned` });
+        toast(`${name} scores assigned; low scores are worth reviewing first.`, "success");
+        await plotScoresHistogram();
+        await loadAlignments();
+      },
+      "Computing…"
+    );
+  }
 
   // Refresh button
   bindAsyncButton(

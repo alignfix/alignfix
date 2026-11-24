@@ -29,22 +29,17 @@ export async function renderHistory(projectId) {
   try {
     fixesHistory = await getFixes(projectId);
   } catch (e) {
-    app.innerHTML = `<div class="alert alert-danger">Failed to load history: ${e.message}</div>`;
+    app.innerHTML = `<div class="alert alert-danger">Failed to load history: ${escapeHtml(e.message)}</div>`;
     return;
   }
 
   app.innerHTML = `
-    <div class="py-4">
+    <div>
       <div class="row">
         <div class="col-12">
-          <div class="d-flex justify-content-between align-items-center mb-4">
-            <h1 class="mb-0">
-              <i class="fas fa-history text-primary me-2"></i>
-              Fixes History
-            </h1>
-            <div class="badge bg-secondary">
-              ${fixesHistory.length} fixes
-            </div>
+          <div class="page-header">
+            <h1 class="page-title">History</h1>
+            <span class="badge text-bg-secondary">${fixesHistory.length} applied</span>
           </div>
         </div>
         
