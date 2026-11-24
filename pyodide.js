@@ -35,9 +35,21 @@ async function loadPythonModule(path, moduleName) {
     `);
 }
 
-export async function initPyodide() {
-    
-    
+// One shared initialization: callers arriving while it runs wait for it instead
+// of getting an interpreter whose packages and modules are not loaded yet.
+let initPromise = null;
+
+export function initPyodide() {
+    if (!initPromise) {
+        initPromise = _initPyodide().catch(err => {
+            initPromise = null;  // allow a retry after a failed load
+            throw err;
+        });
+    }
+    return initPromise;
+}
+
+async function _initPyodide() {
     if (!pyodide) {
         pyodide = await loadPyodide();
         console.log("Pyodide loaded");
@@ -74,6 +86,11 @@ export async function initPyodide() {
         await loadPythonModule('backend/py/fixes.py', 'fixes');
         await loadPythonModule('backend/py/utils.py', 'utils');
         await loadPythonModule('backend/py/binary.py', 'binary');
+        // module files were written after the import system may have cached "/"
+        await pyodide.runPythonAsync(`
+    import importlib
+    importlib.invalidate_caches()
+        `);
         console.log("Python modules loaded");
     }
 
