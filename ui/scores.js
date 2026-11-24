@@ -277,18 +277,19 @@ export async function renderScores(projectId) {
                   <h5>Alignment Stability Index</h5>
                   <p>This metric measures the <strong>quality and reliability</strong> of word alignments between source and target sentences.</p>
                   
-                  <h6>Components (weighted):</h6>
+                  <h6>Components:</h6>
                   <ul>
-                    <li><strong>Consistency (40%):</strong> Ratio of aligned words to total words. Higher coverage indicates more complete alignment.</li>
-                    <li><strong>Agreement (40%):</strong> Balance between source and target coverage. Penalizes imbalanced alignments where one side has much better coverage.</li>
-                    <li><strong>Connectivity (20%):</strong> Measures how densely packed alignment points are. Scattered alignments score lower than tightly connected ones.</li>
+                    <li><strong>Coverage:</strong> the share of source words (recall) and of target words (precision) with at least one alignment point.</li>
+                    <li><strong>Balance:</strong> their harmonic mean (F1), which is low if one side is covered much better than the other.</li>
+                    <li><strong>Unaligned penalty:</strong> the F1 is multiplied by the share of all words that are aligned.</li>
                   </ul>
-                  
+
                   <h6>Formula:</h6>
                   <div class="bg-light p-3 rounded mb-2">
-                    <code>Stability = 0.4 × Consistency + 0.4 × Agreement + 0.2 × Connectivity</code>
+                    <code>P = aligned_tgt / |T|, R = aligned_src / |S|, F1 = 2PR / (P + R)</code><br>
+                    <code>Stability = F1 × (1 − (unaligned_src + unaligned_tgt) / (|S| + |T|))</code>
                   </div>
-                  
+
                   <h6>Score Range:</h6>
                   <div class="d-flex align-items-center gap-3 mt-2">
                     <span class="badge bg-danger">0.0 - Bad</span>
