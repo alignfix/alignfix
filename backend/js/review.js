@@ -14,40 +14,49 @@
  * limitations under the License.
  */
 
-/* Word-level consistency review and phrase table export (backend/py/review.py). */
+/* Translation issues review and phrase table export (backend/py/review.py). */
 
 import { initPyodide } from "../../pyodide.js";
 import { downloadBlob } from "./utils.js";
 
-/**
- * One page of the word table, with summary and chart data.
- * params: project_id, side ('src'|'tgt'), start, length, search, sort
- * ('suspicious'|'consistency'|'frequency'|'alpha'), suspicious_only,
- * min_total, include_hidden.
- */
-export async function fetchWordOverview(params) {
+async function callReview(fn, args) {
   const pyodide = await initPyodide();
-  pyodide.globals.set("wo_args", pyodide.toPy({
-    project_id: parseInt(params.project_id),
-    side: params.side === "tgt" ? "tgt" : "src",
-    start: parseInt(params.start) || 0,
-    length: parseInt(params.length) || 25,
-    search: String(params.search || ""),
-    sort: String(params.sort || "suspicious"),
-    suspicious_only: Boolean(params.suspicious_only),
-    min_total: parseInt(params.min_total) || 1,
-    include_hidden: Boolean(params.include_hidden),
-  }));
+  pyodide.globals.set("rv_args", pyodide.toPy(args));
   try {
     const json = await pyodide.runPythonAsync(`
 import json
-from review import word_overview
-json.dumps(await word_overview(**wo_args), ensure_ascii=False)
+import review
+json.dumps(await review.${fn}(**rv_args), ensure_ascii=False)
 `);
     return JSON.parse(json);
   } finally {
-    pyodide.globals.delete("wo_args");
+    pyodide.globals.delete("rv_args");
   }
+}
+
+/**
+ * One page of the issue list with the project summary.
+ * params: project_id, view ('sentences'|'words'), start, length, search,
+ * min_level ('high'|'medium'|'low'), kind, side ('src'|'tgt'|'').
+ */
+export function fetchReviewOverview(params) {
+  return callReview("review_overview", {
+    project_id: parseInt(params.project_id),
+    view: params.view === "words" ? "words" : "sentences",
+    start: parseInt(params.start) || 0,
+    length: parseInt(params.length) || 25,
+    search: String(params.search || ""),
+    min_level: ["high", "medium", "low"].includes(params.min_level) ? params.min_level : "medium",
+    kind: String(params.kind || ""),
+    side: ["src", "tgt"].includes(params.side) ? params.side : "",
+  });
+}
+
+/** The flagged sentence pairs of one word. */
+export function fetchWordExamples(project_id, side, word) {
+  return callReview("word_examples", {
+    project_id: parseInt(project_id), side: side === "tgt" ? "tgt" : "src", word: String(word),
+  });
 }
 
 /** The phrase table summarised per source phrase (see review.phrase_table). */

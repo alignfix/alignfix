@@ -1,25 +1,22 @@
 # py/review.py
 """
-Word-level review: how consistently each word is translated.
+Review: sentence pairs and words that look like translation errors.
 
-For every word w on one side (case-folded, punctuation skipped) and every
-occurrence of w, the *variant* is what that occurrence is aligned to: the
-aligned words of the other side, in sentence order ("the house"), or
-"unaligned". Then
+Built on issues.py: a sentence pair has an issue when a word lacks every one of
+its usual translations on the other side although it nearly always has one,
+when numbers differ, when the target repeats itself, has an unusual length or
+copies the source. Words that are just translated in several valid ways
+(synonyms, inflections, paraphrases) are not flagged.
 
-    consistency(w) = count of the most common variant / occurrences of w
+Severity of a sentence pair by its issue score (issues.issue_score):
+    high    >= HIGH_SCORE
+    medium  >= MEDIUM_SCORE
+    low     > 0
 
-(the unaligned bucket counts as a variant), and w is *suspicious* when it
-occurs at least SUSPICIOUS_MIN_TOTAL times and
+On a real German-Italian corpus with 2% injected errors, 30% of the high pairs
+were injected errors (most of the rest real mismatches), against 2% at random.
 
-    consistency < LOW_CONSISTENCY, or
-    it has MANY_VARIANTS or more aligned variants, or
-    HIGH_UNALIGNED or more of its occurrences are unaligned.
-
-The same occurrence statistics as lexicon.py, but with the raw variant counts
-kept, so the review page can show them. Results are cached per project and
-side until the sentences or the hide list change.
-
+Results are cached per project until the sentences or the hide list change.
 The phrase table (phrase_table) summarises the extracted phrase pairs per
 source phrase, for export.
 """
@@ -27,18 +24,17 @@ import math
 from collections import Counter, defaultdict
 
 from db import get_db
-from alignment import parse_alignment
-from lexicon import normalize, is_content
+from issues import IssueModel, sentence_issues, issue_score, describe, KIND_LABELS, _NUMBER, _words
+from text import NO_BLANK_TOKEN, BLANK_TOKEN
 import progress
 
-SUSPICIOUS_MIN_TOTAL = 10
-LOW_CONSISTENCY = 0.75
-MANY_VARIANTS = 4
-HIGH_UNALIGNED = 0.20
-MAX_VARIANTS_KEPT = 50
-UNALIGNED = ""            # variant key of unaligned occurrences
+HIGH_SCORE = 6.0
+MEDIUM_SCORE = 3.0
+LEVELS = {"high": HIGH_SCORE, "medium": MEDIUM_SCORE, "low": 1e-9}
+EXAMPLES_PER_WORD = 20
+WORD_MIN_LIFT = 1.0       # nats above the surprise threshold, see issues.IssueModel.lift
 
-_cache = {}               # (project_id, side) -> (signature, words)
+_cache = {}               # project_id -> (signature, analysis)
 
 
 def _entropy(counts):
@@ -48,185 +44,251 @@ def _entropy(counts):
     return max(0.0, -sum(c / total * math.log2(c / total) for c in counts if c))
 
 
-def suspicion(total, consistency, num_variants, unaligned_share):
-    """(reasons, score) for one word; no reasons = not suspicious."""
-    reasons, score = [], 0
-    if total < SUSPICIOUS_MIN_TOTAL:
-        return reasons, score
-    if consistency < LOW_CONSISTENCY:
-        reasons.append("low consistency")
-        score += 3
-    if num_variants >= MANY_VARIANTS:
-        reasons.append("many variants")
-        score += 2
-    if unaligned_share >= HIGH_UNALIGNED:
-        reasons.append("often unaligned")
-        score += 2
-    return reasons, score
+def level(score):
+    if score >= HIGH_SCORE:
+        return "high"
+    if score >= MEDIUM_SCORE:
+        return "medium"
+    return "low" if score > 0 else None
 
 
 def _signature(cursor, project_id):
-    """Changes whenever sentences, alignments or the hide list change."""
+    """Changes whenever sentences or alignments change."""
     cursor.execute(
         "SELECT COUNT(*), MAX(row_id), TOTAL(LENGTH(alignment)), TOTAL(LENGTH(line1) + LENGTH(line2)), "
         "MAX(updated_at) FROM alignments WHERE project_id=? AND deleted_at IS NULL", (project_id,))
-    sig = cursor.fetchone()
-    cursor.execute("SELECT COUNT(*), MAX(id) FROM ignored WHERE project_id=?", (project_id,))
-    return sig + cursor.fetchone()
+    return cursor.fetchone()
 
 
-def _hidden_words(cursor, project_id, side):
-    """Words hidden whatever their translation (hide-list wildcards) on `side`."""
+def _hidden_words(cursor, project_id):
+    """{'src': set, 'tgt': set} of single words hidden whatever their translation."""
     cursor.execute("SELECT src_phrase, tgt_phrase FROM ignored WHERE project_id=?", (project_id,))
-    hidden = set()
+    hidden = {"src": set(), "tgt": set()}
     for src, tgt in cursor.fetchall():
         src, tgt = (src or "").strip(), (tgt or "").strip()
-        word = src if side == "src" and src and not tgt else tgt if side == "tgt" and tgt and not src else None
-        if word and " " not in word:
-            hidden.add(word.casefold())
+        if src and not tgt and " " not in src:
+            hidden["src"].add(src.casefold())
+        elif tgt and not src and " " not in tgt:
+            hidden["tgt"].add(tgt.casefold())
     return hidden
 
 
-async def word_stats(project_id, side="src"):
-    """
-    {word: row} for all words of `side` ('src' or 'tgt'), see module docstring.
-    Rows: word, total, consistency, top, num_variants, unaligned, unaligned_share,
-    entropy, variants [[variant, count], ...] (most frequent first, '' = unaligned),
-    suspicious, score, reasons, hidden.
-    """
-    if side not in ("src", "tgt"):
-        raise ValueError("side must be 'src' or 'tgt'")
-    _, cursor = get_db()
+async def _check_all(project_id, cursor):
+    """All issues of all sentence pairs (slow; cached until the sentences change)."""
     sig = _signature(cursor, project_id)
-    cached = _cache.get((project_id, side))
+    cached = _cache.get(project_id)
     if cached and cached[0] == sig:
         return cached[1]
 
-    cursor.execute("SELECT line1, line2, alignment FROM alignments "
-                   "WHERE project_id=? AND deleted_at IS NULL", (project_id,))
-    rows = cursor.fetchall()
-    variants = defaultdict(Counter)
-    n = len(rows) or 1
-    for i, (line1, line2, alignment) in enumerate(rows):
-        if i % 2000 == 0:
-            await progress.checkpoint(i / n, f"{i:,} / {len(rows):,} sentences")
-        src = (line1 or "").split()
-        tgt = (line2 or "").split()
-        try:
-            links = parse_alignment(alignment or "")
-        except ValueError:
-            links = []
-        if side == "src":
-            words, other = src, tgt
-            partners = defaultdict(set)
-            for s, t in links:
-                if 0 <= s < len(src) and 0 <= t < len(tgt):
-                    partners[s].add(t)
-        else:
-            words, other = tgt, src
-            partners = defaultdict(set)
-            for s, t in links:
-                if 0 <= s < len(src) and 0 <= t < len(tgt):
-                    partners[t].add(s)
-        for pos, tok in enumerate(words):
-            if not is_content(tok):
-                continue
-            aligned = [normalize(other[j]) for j in sorted(partners.get(pos, ())) if is_content(other[j])]
-            variants[normalize(tok)][" ".join(aligned)] += 1
+    with progress.stage(0.0, 0.05, "Loading sentences"):
+        cursor.execute("SELECT row_id, line1, line2, alignment FROM alignments "
+                       "WHERE project_id=? AND deleted_at IS NULL ORDER BY row_id", (project_id,))
+        rows = cursor.fetchall()
+    model = await progress.drive(
+        IssueModel.build_steps((line1, line2, al) for _, line1, line2, al in rows),
+        0.05, 0.6, "Learning the usual translations")
+    checked = []
+    with progress.stage(0.6, 1.0, "Checking sentences"):
+        n = len(rows) or 1
+        for i, (row_id, line1, line2, _) in enumerate(rows):
+            if i % 2000 == 0:
+                await progress.checkpoint(i / n, f"{i:,} / {len(rows):,} sentences")
+            found = sentence_issues(model, line1, line2)
+            if found:
+                checked.append((row_id, found))
+    raw = {"model": model, "checked": len(rows), "found": checked}
+    _cache[project_id] = (sig, raw)
+    _views.pop(project_id, None)
+    return raw
 
-    hidden = _hidden_words(cursor, project_id, side)
+
+_views = {}               # project_id -> (raw, hidden key, analysis)
+
+
+async def analyse(project_id):
+    """
+    {'sentences': [{row_id, score, level, issues}], 'checked': n, 'words': {(side, word): {...}}}:
+    sentences with issues only, most severe first, without the hidden words.
+    """
+    _, cursor = get_db()
+    raw = await _check_all(project_id, cursor)
+    hidden = _hidden_words(cursor, project_id)
+    key = (frozenset(hidden["src"]), frozenset(hidden["tgt"]))
+    view = _views.get(project_id)
+    if view and view[0] is raw and view[1] == key:
+        return view[2]
+
+    model = raw["model"]
+    sentences = []
     words = {}
-    for word, counter in variants.items():
-        total = sum(counter.values())
-        unaligned = counter.get(UNALIGNED, 0)
-        ranked = counter.most_common()
-        top_variant, top_count = ranked[0]
-        aligned_variants = len(counter) - (1 if unaligned else 0)
-        consistency = top_count / total
-        unaligned_share = unaligned / total
-        reasons, score = suspicion(total, consistency, aligned_variants, unaligned_share)
-        words[word] = {
-            "word": word,
-            "total": total,
-            "consistency": consistency,
-            "top": top_variant,
-            "num_variants": aligned_variants,
-            "unaligned": unaligned,
-            "unaligned_share": unaligned_share,
-            "entropy": _entropy(counter.values()),
-            "variants": [[v, c] for v, c in ranked[:MAX_VARIANTS_KEPT]],
-            "suspicious": bool(reasons),
-            "score": score,
-            "reasons": reasons,
-            "hidden": word in hidden,
-        }
-    _cache[(project_id, side)] = (sig, words)
-    return words
+    for row_id, found in raw["found"]:
+        found = [f for f in found
+                 if not (f["kind"] in ("missing", "unexplained") and f["word"] in hidden[f["side"]])]
+        if not found:
+            continue
+        score = issue_score(found)
+        sentences.append({"row_id": row_id, "score": score, "level": level(score), "issues": found})
+        for f in found:
+            # the words list only counts clear cases: function words, whose translations
+            # appear almost everywhere, are missed often but say little each time
+            if f["kind"] not in ("missing", "unexplained") or f["lift"] < WORD_MIN_LIFT:
+                continue
+            key_w = (f["side"], f["word"])
+            entry = words.get(key_w)
+            if entry is None:
+                model_side = model.src if f["side"] == "src" else model.tgt
+                entry = words[key_w] = {
+                    "side": f["side"], "word": f["word"], "kind": f["kind"],
+                    "flagged": 0, "sentences": model_side.sentences.get(f["word"], 0),
+                    "rate": f["rate"], "expected": f["expected"], "severity": 0.0, "examples": [],
+                }
+            entry["flagged"] += 1
+            entry["severity"] += f["lift"]
+            entry["examples"].append((score, row_id))
+
+    sentences.sort(key=lambda r: (-r["score"], r["row_id"]))
+    for entry in words.values():
+        entry["examples"] = [row_id for _, row_id in sorted(entry["examples"], key=lambda x: (-x[0], x[1]))[:EXAMPLES_PER_WORD]]
+        entry["severity"] = round(entry["severity"], 3)
+    analysis = {"sentences": sentences, "checked": raw["checked"], "words": words}
+    _views[project_id] = (raw, key, analysis)
+    return analysis
 
 
-CONSISTENCY_BUCKETS = [("<50%", 0.0, 0.5), ("50–75%", 0.5, 0.75), ("75–90%", 0.75, 0.9),
-                       ("90–99%", 0.9, 0.99), ("≥99%", 0.99, 1.01)]
-FREQUENCY_BUCKETS = [("1–9", 1, 10), ("10–19", 10, 20), ("20–49", 20, 50), ("50–99", 50, 100),
-                     ("100–999", 100, 1000), ("1000+", 1000, float("inf"))]
+def _segments(line, flagged):
+    """Detokenised display of a tokenised line: [[text, flagged], ...], separators included."""
+    out = []
+    glue = True
+    for i, tok in enumerate((line or "").split()):
+        if tok == NO_BLANK_TOKEN:
+            glue = True
+            continue
+        if tok == BLANK_TOKEN:
+            glue = False
+            continue
+        if not glue:
+            out.append([" ", False])
+        out.append([tok, i in flagged])
+        glue = False
+    return out
 
 
-def _sort_key(mode):
-    if mode == "consistency":    # worst first
-        return lambda r: (r["consistency"], -r["total"], r["word"])
-    if mode == "suspicious":
-        return lambda r: (-r["suspicious"], -r["score"], r["consistency"], -r["total"], r["word"])
-    if mode == "alpha":
-        return lambda r: r["word"]
-    return lambda r: (-r["total"], r["consistency"], r["word"])   # frequency
+def _flagged_positions(line, words):
+    """Token positions whose normalised form is in `words` (for numbers: contains it)."""
+    found = set()
+    for i, tok in enumerate((line or "").split()):
+        if tok.lower() in words or any(n.replace(",", ".") in words for n in _NUMBER.findall(tok)):
+            found.add(i)
+    return found
 
 
-async def word_overview(project_id, side="src", start=0, length=25, search="",
-                        sort="suspicious", suspicious_only=False, min_total=1,
-                        include_hidden=False):
-    """One page of the word table plus summary and charts of the whole project."""
-    words = await word_stats(project_id, side)
-    rows = [r for r in words.values() if include_hidden or not r["hidden"]]
+def _load_rows(cursor, project_id, row_ids):
+    if not row_ids:
+        return {}
+    marks = ",".join("?" * len(row_ids))
+    cursor.execute(f"SELECT row_id, line1, line2 FROM alignments WHERE project_id=? AND row_id IN ({marks})",
+                   (project_id, *row_ids))
+    return {r[0]: (r[1], r[2]) for r in cursor.fetchall()}
 
-    frequent = [r for r in rows if r["total"] >= SUSPICIOUS_MIN_TOTAL]
-    summary = {
-        "words": len(rows),
-        "frequent": len(frequent),
-        "suspicious": sum(r["suspicious"] for r in rows),
-        "hidden": sum(r["hidden"] for r in words.values()),
-        "occurrences": sum(r["total"] for r in rows),
-        "unaligned": sum(r["unaligned"] for r in rows),
-        # occurrence-weighted mean consistency of the frequent words
-        "consistency": (sum(r["consistency"] * r["total"] for r in frequent) /
-                        (sum(r["total"] for r in frequent) or 1)) if frequent else None,
-        "reasons": dict(Counter(reason for r in rows for reason in r["reasons"])),
-        "thresholds": {"min_total": SUSPICIOUS_MIN_TOTAL, "low_consistency": LOW_CONSISTENCY,
-                       "many_variants": MANY_VARIANTS, "high_unaligned": HIGH_UNALIGNED},
-    }
-    charts = {
-        "consistency": [[label, sum(lo <= r["consistency"] < hi for r in frequent),
-                         sum(lo <= r["consistency"] < hi and r["suspicious"] for r in frequent)]
-                        for label, lo, hi in CONSISTENCY_BUCKETS],
-        "frequency": [[label, sum(lo <= r["total"] < hi for r in rows),
-                       sum(lo <= r["total"] < hi and r["suspicious"] for r in rows)]
-                      for label, lo, hi in FREQUENCY_BUCKETS],
-    }
 
-    filtered = [r for r in rows if r["total"] >= max(1, int(min_total or 1))]
-    if suspicious_only:
-        filtered = [r for r in filtered if r["suspicious"]]
-    needle = (search or "").strip().casefold()
-    if needle:
-        filtered = [r for r in filtered
-                    if needle in r["word"] or any(needle in v for v, _ in r["variants"][:10])]
-    filtered.sort(key=_sort_key(sort))
-    start, length = max(0, int(start or 0)), max(1, int(length or 25))
+def _sentence_view(row, line1, line2):
+    src_words = {f["word"] for f in row["issues"] if f["side"] == "src" and f["word"]}
+    tgt_words = {f["word"] for f in row["issues"] if f["side"] == "tgt" and f["word"]}
+    src_pos = {f["index"] for f in row["issues"] if f["side"] == "src" and f["index"] is not None}
+    tgt_pos = {f["index"] for f in row["issues"] if f["side"] == "tgt" and f["index"] is not None}
+    src_pos |= _flagged_positions(line1, {w for w in src_words if w[:1].isdigit()})
+    tgt_pos |= _flagged_positions(line2, {w for w in tgt_words if w[:1].isdigit()})
+    # most words without a counterpart: the two sides probably do not belong together
+    mismatch = False
+    for side, line in (("src", line1), ("tgt", line2)):
+        checked = len(_words(line))
+        flagged = sum(1 for f in row["issues"] if f["side"] == side and f["kind"] in ("missing", "unexplained"))
+        if flagged >= 4 and flagged >= 0.4 * checked:
+            mismatch = True
     return {
-        "total": len(rows),
-        "filtered": len(filtered),
-        "rows": filtered[start:start + length],
-        "summary": summary,
-        "charts": charts,
+        "row_id": row["row_id"],
+        "score": row["score"],
+        "level": row["level"],
+        "mismatch": mismatch,
+        "src": _segments(line1, src_pos),
+        "tgt": _segments(line2, tgt_pos),
+        "issues": [{"side": f["side"], "word": f["word"], "kind": f["kind"],
+                    "label": KIND_LABELS[f["kind"]], "text": describe(f),
+                    "anomaly": round(f["anomaly"], 2)} for f in row["issues"]],
     }
+
+
+def _summary(analysis):
+    sentences = analysis["sentences"]
+    by_level = Counter(r["level"] for r in sentences)
+    kinds = defaultdict(Counter)       # kind -> level -> sentences
+    for r in sentences:
+        for kind in {f["kind"] for f in r["issues"]}:
+            kinds[kind][r["level"]] += 1
+    top_words = sorted(analysis["words"].values(), key=lambda w: (-w["severity"], w["word"]))[:10]
+    return {
+        "checked": analysis["checked"],
+        "high": by_level["high"], "medium": by_level["medium"], "low": by_level["low"],
+        "words": sum(1 for w in analysis["words"].values() if w["flagged"]),
+        "kinds": [[kind, KIND_LABELS[kind], kinds[kind]["high"], kinds[kind]["medium"], kinds[kind]["low"]]
+                  for kind in KIND_LABELS if kinds[kind]],
+        "top_words": [[w["side"], w["word"], w["flagged"]] for w in top_words],
+        "thresholds": {"high": HIGH_SCORE, "medium": MEDIUM_SCORE},
+    }
+
+
+async def review_overview(project_id, view="sentences", start=0, length=25, search="",
+                          min_level="medium", kind="", side=""):
+    """One page of the sentence or word list, plus the summary of the whole project."""
+    analysis = await analyse(project_id)
+    _, cursor = get_db()
+    start, length = max(0, int(start or 0)), max(1, min(200, int(length or 25)))
+    needle = (search or "").strip().casefold()
+    threshold = LEVELS.get(min_level, MEDIUM_SCORE)
+
+    if view == "words":
+        rows = [w for w in analysis["words"].values() if not side or w["side"] == side]
+        if needle:
+            rows = [w for w in rows if needle in w["word"] or any(needle in e for e in w["expected"])]
+        rows.sort(key=lambda w: (-w["severity"], -w["flagged"], w["word"]))
+        page = [{k: v for k, v in w.items() if k != "examples"} for w in rows[start:start + length]]
+        return {"view": "words", "filtered": len(rows), "rows": page, "summary": _summary(analysis)}
+
+    rows = [r for r in analysis["sentences"] if r["score"] >= threshold]
+    if kind:
+        rows = [r for r in rows if any(f["kind"] == kind for f in r["issues"])]
+    if side:
+        rows = [r for r in rows if any(f["side"] == side for f in r["issues"])]
+    if needle:
+        hits = []
+        texts = _load_rows(cursor, project_id, [r["row_id"] for r in rows]) if rows else {}
+        for r in rows:
+            line1, line2 = texts.get(r["row_id"], ("", ""))
+            if (needle in (line1 or "").casefold() or needle in (line2 or "").casefold()
+                    or any(needle in f["word"] for f in r["issues"])):
+                hits.append(r)
+        rows = hits
+    page = rows[start:start + length]
+    texts = _load_rows(cursor, project_id, [r["row_id"] for r in page])
+    return {
+        "view": "sentences",
+        "filtered": len(rows),
+        "rows": [_sentence_view(r, *texts.get(r["row_id"], ("", ""))) for r in page],
+        "summary": _summary(analysis),
+    }
+
+
+async def word_examples(project_id, side, word):
+    """The flagged sentence pairs of one word (most severe first), for the detail pane."""
+    analysis = await analyse(project_id)
+    entry = analysis["words"].get((side, word))
+    if not entry:
+        return {"word": None, "rows": []}
+    by_id = {r["row_id"]: r for r in analysis["sentences"]}
+    _, cursor = get_db()
+    texts = _load_rows(cursor, project_id, entry["examples"])
+    rows = [_sentence_view(by_id[i], *texts[i]) for i in entry["examples"] if i in by_id and i in texts]
+    return {"word": {k: v for k, v in entry.items() if k != "examples"}, "rows": rows}
 
 
 # ------------------------------------------------------------------ phrase table

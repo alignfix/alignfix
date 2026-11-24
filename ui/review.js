@@ -15,38 +15,39 @@
  */
 
 /*
- * Review page: how consistently each word is translated (backend/py/review.py).
- * Summary and charts on top, then a word table with a detail pane listing the
- * suspicious criteria and the variants, with links to the sentences and
- * buttons to hide a word or a pair.
+ * Review page: sentence pairs and words that look like translation errors
+ * (backend/py/review.py, backend/py/issues.py). Summary on top, then either
+ * the sentence pairs ranked by severity or the words that most often lack
+ * their usual translation, with a detail pane explaining every issue.
  */
 
-import { fetchWordOverview, downloadPhraseTable } from "../backend/js/review.js";
+import { fetchReviewOverview, fetchWordExamples, downloadPhraseTable } from "../backend/js/review.js";
 import { ignorePhrasePair } from "../backend/js/phrases.js";
 import { runActivity, isBusy } from "./activity.js";
 import { toast } from "./dialogs.js";
 import { escapeHtml, reportError, formatCount } from "./utils.js";
 
-const PAGE_SIZE = 25;
-const charts = {};
+const PAGE_SIZE = 20;
+const LEVEL_LABELS = { high: "High", medium: "Medium", low: "Low" };
 
 let state = null;   // per render
 
 const pct = (x, digits = 0) => `${(100 * x).toFixed(digits)}%`;
+const sideName = (side) => (side === "src" ? "source" : side === "tgt" ? "target" : "");
 
 export async function renderReview(projectId, params = new URLSearchParams()) {
   const app = document.getElementById("app");
   state = {
     projectId,
-    side: params.get("side") === "tgt" ? "tgt" : "src",
-    sort: "suspicious",
+    view: params.get("view") === "words" ? "words" : "sentences",
     search: params.get("q") || "",
-    suspiciousOnly: params.get("all") !== "1",
-    minTotal: 1,
+    level: ["high", "medium", "low"].includes(params.get("level")) ? params.get("level") : "medium",
+    kind: params.get("kind") || "",
+    side: ["src", "tgt"].includes(params.get("side")) ? params.get("side") : "",
     start: 0,
     rows: [],
     selected: null,
-    thresholds: null,
+    summary: null,
     requestId: 0,
   };
 
@@ -55,18 +56,18 @@ export async function renderReview(projectId, params = new URLSearchParams()) {
     <div class="page-header">
       <div>
         <h1 class="page-title">Review</h1>
-        <div class="text-muted small">How consistently each word is translated: words with many different
-          or missing translations are worth a look.</div>
+        <div class="text-muted small">Sentence pairs that look like translation errors: missing or added words,
+          wrong numbers, pairs that do not belong together. Synonyms and paraphrases are not flagged.</div>
       </div>
       <div class="d-flex flex-wrap gap-2 align-items-center">
-        <div class="btn-group" role="group" aria-label="Words of">
-          <input type="radio" class="btn-check" name="review-side" id="review-side-src" value="src" ${state.side === "src" ? "checked" : ""}>
-          <label class="btn btn-outline-primary" for="review-side-src">Source words</label>
-          <input type="radio" class="btn-check" name="review-side" id="review-side-tgt" value="tgt" ${state.side === "tgt" ? "checked" : ""}>
-          <label class="btn btn-outline-primary" for="review-side-tgt">Target words</label>
+        <div class="btn-group" role="group" aria-label="Show">
+          <input type="radio" class="btn-check" name="review-view" id="review-view-sentences" value="sentences" ${state.view === "sentences" ? "checked" : ""}>
+          <label class="btn btn-outline-primary" for="review-view-sentences"><i class="fas fa-list me-1"></i>Sentences</label>
+          <input type="radio" class="btn-check" name="review-view" id="review-view-words" value="words" ${state.view === "words" ? "checked" : ""}>
+          <label class="btn btn-outline-primary" for="review-view-words"><i class="fas fa-font me-1"></i>Words</label>
         </div>
         <div class="dropdown">
-          <button class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+          <button class="btn btn-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
             <i class="fas fa-file-export me-1"></i>Export phrase table
           </button>
           <ul class="dropdown-menu dropdown-menu-end">
@@ -88,21 +89,21 @@ export async function renderReview(projectId, params = new URLSearchParams()) {
     </div>
 
     <div class="row g-3 mb-3">
-      <div class="col-12 col-xl-6">
+      <div class="col-12 col-xl-7">
         <div class="card h-100">
           <div class="card-body">
-            <h6 class="card-title mb-1">Consistency of frequent words</h6>
-            <div class="small text-muted mb-2" id="chart-consistency-note">Words with at least 10 occurrences</div>
-            <div class="chart-box"><canvas id="chart-consistency" aria-label="Words per consistency range" role="img"></canvas></div>
+            <h6 class="card-title mb-1">Issues by type</h6>
+            <div class="small text-muted mb-2">Sentence pairs with at least one issue of the type; click a bar to filter</div>
+            <div class="chart-box"><canvas id="chart-kinds" aria-label="Sentence pairs per issue type" role="img"></canvas></div>
           </div>
         </div>
       </div>
-      <div class="col-12 col-xl-6">
+      <div class="col-12 col-xl-5">
         <div class="card h-100">
           <div class="card-body">
-            <h6 class="card-title mb-1">Word frequency</h6>
-            <div class="small text-muted mb-2">Words per number of occurrences</div>
-            <div class="chart-box"><canvas id="chart-frequency" aria-label="Words per frequency range" role="img"></canvas></div>
+            <h6 class="card-title mb-1">Words most often without their translation</h6>
+            <div class="small text-muted mb-2">Weighted by how surprising each case is</div>
+            <ol class="top-words list-unstyled mb-0" id="review-top-words"></ol>
           </div>
         </div>
       </div>
@@ -113,49 +114,35 @@ export async function renderReview(projectId, params = new URLSearchParams()) {
         <div class="card">
           <div class="card-header">
             <div class="d-flex flex-wrap gap-2 align-items-center">
-              <div class="flex-grow-1" style="min-width: 12rem">
+              <div class="flex-grow-1" style="min-width: 11rem">
                 <div class="input-group input-group-sm">
                   <span class="input-group-text"><i class="fas fa-search"></i></span>
-                  <input type="search" class="form-control" id="review-search" placeholder="Word or translation" value="${escapeHtml(state.search)}" aria-label="Search words">
+                  <input type="search" class="form-control" id="review-search" placeholder="Word or text" value="${escapeHtml(state.search)}" aria-label="Search">
                 </div>
               </div>
-              <div>
-                <select class="form-select form-select-sm" id="review-sort" aria-label="Sort" style="width: auto">
-                  <option value="suspicious">Most suspicious first</option>
-                  <option value="consistency">Worst consistency first</option>
-                  <option value="frequency">Most frequent first</option>
-                  <option value="alpha">Alphabetical</option>
-                </select>
-              </div>
-              <div>
-                <div class="form-check form-switch mb-0 text-nowrap">
-                  <input class="form-check-input" type="checkbox" role="switch" id="review-suspicious-only" ${state.suspiciousOnly ? "checked" : ""}>
-                  <label class="form-check-label small" for="review-suspicious-only">Suspicious only</label>
-                </div>
-              </div>
+              <select class="form-select form-select-sm w-auto sentences-only" id="review-level" aria-label="Severity">
+                <option value="high">High only</option>
+                <option value="medium">High and medium</option>
+                <option value="low">All</option>
+              </select>
+              <select class="form-select form-select-sm w-auto sentences-only" id="review-kind" aria-label="Issue type">
+                <option value="">All types</option>
+              </select>
+              <select class="form-select form-select-sm w-auto" id="review-side" aria-label="Side">
+                <option value="">Both sides</option>
+                <option value="src">Source</option>
+                <option value="tgt">Target</option>
+              </select>
             </div>
           </div>
-          <div class="table-responsive">
-            <table class="table table-hover align-middle mb-0 review-table">
-              <thead>
-                <tr>
-                  <th scope="col">Word</th>
-                  <th scope="col" class="text-end">Occ.</th>
-                  <th scope="col" style="width: 28%">Consistency</th>
-                  <th scope="col">Top translation</th>
-                  <th scope="col" class="text-end" title="aligned variants">Var.</th>
-                </tr>
-              </thead>
-              <tbody id="review-rows">
-                <tr><td colspan="5" class="text-center text-muted py-4"><span class="spinner-border spinner-border-sm me-2"></span>Analysing the alignments…</td></tr>
-              </tbody>
-            </table>
+          <div id="review-list" class="review-list" role="listbox" aria-label="Issues">
+            <div class="text-center text-muted py-5"><span class="spinner-border spinner-border-sm me-2"></span>Checking the translations…</div>
           </div>
           <div class="card-footer d-flex justify-content-between align-items-center small">
             <span class="text-muted" id="review-info"></span>
             <div class="btn-group btn-group-sm">
-              <button class="btn btn-outline-secondary" id="review-prev" aria-label="Previous page"><i class="fas fa-chevron-left"></i></button>
-              <button class="btn btn-outline-secondary" id="review-next" aria-label="Next page"><i class="fas fa-chevron-right"></i></button>
+              <button class="btn btn-secondary" id="review-prev" aria-label="Previous page"><i class="fas fa-chevron-left"></i></button>
+              <button class="btn btn-secondary" id="review-next" aria-label="Next page"><i class="fas fa-chevron-right"></i></button>
             </div>
           </div>
         </div>
@@ -164,14 +151,16 @@ export async function renderReview(projectId, params = new URLSearchParams()) {
         <div class="card review-detail" id="review-detail">
           <div class="card-body empty-state">
             <i class="fas fa-hand-pointer"></i>
-            <p class="mb-0">Select a word to see its translations.</p>
+            <p class="mb-0">Select an entry to see why it was flagged.</p>
           </div>
         </div>
       </div>
     </div>`;
 
-  document.getElementById("review-sort").value = state.sort;
+  document.getElementById("review-level").value = state.level;
+  document.getElementById("review-side").value = state.side;
   bindControls();
+  syncViewControls();
   await load({ first: true });
 }
 
@@ -181,52 +170,57 @@ async function load({ first = false } = {}) {
   const id = ++state.requestId;
   const params = {
     project_id: state.projectId,
-    side: state.side,
+    view: state.view,
     start: state.start,
     length: PAGE_SIZE,
     search: state.search,
-    sort: state.sort,
-    suspicious_only: state.suspiciousOnly,
-    min_total: state.minTotal,
+    min_level: state.level,
+    kind: state.kind,
+    side: state.side,
   };
   let result;
   try {
     // the first analysis of a project reads all sentences: show progress
     result = first && !isBusy()
-      ? await runActivity("Analysing word consistency", () => fetchWordOverview(params),
-          { done: r => `${formatCount(r.summary.words)} words analysed, ${formatCount(r.summary.suspicious)} suspicious` })
-      : await fetchWordOverview(params);
+      ? await runActivity("Checking translations", () => fetchReviewOverview(params),
+          { done: r => `${formatCount(r.summary.checked)} sentence pairs checked: ${formatCount(r.summary.high)} high, ${formatCount(r.summary.medium)} medium` })
+      : await fetchReviewOverview(params);
   } catch (err) {
     reportError(err);
-    const body = document.getElementById("review-rows");
-    if (body) body.innerHTML = `<tr><td colspan="5" class="text-center text-danger py-4">Could not analyse the words (see the logs).</td></tr>`;
+    const list = document.getElementById("review-list");
+    if (list) list.innerHTML = `<div class="text-center text-danger py-5">Could not check the translations (see the logs).</div>`;
     return;
   }
-  if (id !== state.requestId || !document.getElementById("review-rows")) return;  // outdated or page left
+  if (id !== state.requestId || !document.getElementById("review-list")) return;  // outdated or page left
 
   state.rows = result.rows;
-  state.thresholds = result.summary.thresholds;
+  state.summary = result.summary;
   renderSummary(result.summary);
-  renderCharts(result.charts);
-  renderRows(result);
-  const keep = state.selected && state.rows.find(r => r.word === state.selected.word);
-  selectWord(keep || state.rows[0] || null);
+  renderKinds(result.summary);
+  renderTopWords(result.summary);
+  renderList(result);
+  const same = (a, b) => a && b && (state.view === "words" ? a.word === b.word && a.side === b.side : a.row_id === b.row_id);
+  const keep = state.selected && state.rows.find(r => same(r, state.selected));
+  select(keep || state.rows[0] || null);
+}
+
+function syncViewControls() {
+  document.querySelectorAll(".sentences-only").forEach(el => { el.hidden = state.view !== "sentences"; });
+  document.getElementById("review-search").placeholder = state.view === "words" ? "Word or translation" : "Word or text";
 }
 
 function bindControls() {
   let timer = null;
+  const reload = () => { state.start = 0; load(); };
   document.getElementById("review-search").addEventListener("input", (e) => {
     clearTimeout(timer);
-    timer = setTimeout(() => { state.search = e.target.value; state.start = 0; load(); }, 250);
+    timer = setTimeout(() => { state.search = e.target.value; reload(); }, 250);
   });
-  document.getElementById("review-sort").addEventListener("change", (e) => {
-    state.sort = e.target.value; state.start = 0; load();
-  });
-  document.getElementById("review-suspicious-only").addEventListener("change", (e) => {
-    state.suspiciousOnly = e.target.checked; state.start = 0; load();
-  });
-  document.querySelectorAll('input[name="review-side"]').forEach(input => input.addEventListener("change", (e) => {
-    state.side = e.target.value; state.start = 0; state.selected = null; load({ first: true });
+  document.getElementById("review-level").addEventListener("change", (e) => { state.level = e.target.value; reload(); });
+  document.getElementById("review-kind").addEventListener("change", (e) => { state.kind = e.target.value; reload(); });
+  document.getElementById("review-side").addEventListener("change", (e) => { state.side = e.target.value; reload(); });
+  document.querySelectorAll('input[name="review-view"]').forEach(input => input.addEventListener("change", (e) => {
+    state.view = e.target.value; state.selected = null; syncViewControls(); reload();
   }));
   document.getElementById("review-prev").addEventListener("click", () => {
     state.start = Math.max(0, state.start - PAGE_SIZE); load();
@@ -234,23 +228,39 @@ function bindControls() {
   document.getElementById("review-next").addEventListener("click", () => {
     state.start += PAGE_SIZE; load();
   });
-  document.getElementById("review-rows").addEventListener("click", (e) => {
-    const tr = e.target.closest("tr[data-index]");
-    if (tr) selectWord(state.rows[Number(tr.dataset.index)]);
+  const list = document.getElementById("review-list");
+  list.addEventListener("click", (e) => {
+    const item = e.target.closest("[data-index]");
+    if (item && !e.target.closest("a")) select(state.rows[Number(item.dataset.index)]);
   });
-  document.getElementById("review-rows").addEventListener("keydown", (e) => {
-    const tr = e.target.closest("tr[data-index]");
-    if (!tr) return;
-    const index = Number(tr.dataset.index);
+  list.addEventListener("keydown", (e) => {
+    const item = e.target.closest("[data-index]");
+    if (!item) return;
+    const index = Number(item.dataset.index);
     let next = null;
     if (e.key === "ArrowDown") next = index + 1;
     else if (e.key === "ArrowUp") next = index - 1;
-    else if (e.key === "Enter" || e.key === " ") { selectWord(state.rows[index]); e.preventDefault(); return; }
+    else if (e.key === "Enter" || e.key === " ") { select(state.rows[index]); e.preventDefault(); return; }
     if (next !== null && state.rows[next]) {
       e.preventDefault();
-      selectWord(state.rows[next]);
-      document.querySelector(`#review-rows tr[data-index="${next}"]`)?.focus();
+      select(state.rows[next]);
+      list.querySelector(`[data-index="${next}"]`)?.focus();
     }
+  });
+  document.getElementById("review-top-words").addEventListener("click", (e) => {
+    const a = e.target.closest("[data-word]");
+    if (!a) return;
+    e.preventDefault();
+    state.view = "words";
+    document.getElementById("review-view-words").checked = true;
+    state.search = a.dataset.word;
+    state.side = a.dataset.side;
+    document.getElementById("review-search").value = state.search;
+    document.getElementById("review-side").value = state.side;
+    state.selected = { word: a.dataset.word, side: a.dataset.side };
+    syncViewControls();
+    state.start = 0;
+    load();
   });
   document.querySelectorAll(".export-btn").forEach(btn => btn.addEventListener("click", async () => {
     try {
@@ -278,178 +288,243 @@ function statCard(label, value, note, tone = "") {
 }
 
 function renderSummary(s) {
-  const t = s.thresholds;
-  const sideName = state.side === "src" ? "source" : "target";
-  const reasons = Object.entries(s.reasons).map(([r, n]) => `${formatCount(n)} ${r}`).join(", ") || "none";
+  const share = (n) => (s.checked ? ` (${pct(n / s.checked, 1)})` : "");
   document.getElementById("review-summary").innerHTML = [
-    statCard(`Distinct ${sideName} words`, formatCount(s.words),
-      `${formatCount(s.frequent)} occur ${t.min_total}+ times` + (s.hidden ? `, ${formatCount(s.hidden)} hidden` : "")),
-    statCard("Suspicious", formatCount(s.suspicious),
-      s.frequent ? `${pct(s.suspicious / s.frequent)} of frequent words: ${reasons}` : "no frequent words",
-      s.suspicious ? "stat-warning" : "stat-ok"),
-    statCard("Consistency", s.consistency == null ? "–" : pct(s.consistency, 1),
-      "average share of the top translation (frequent words, by occurrences)"),
-    statCard("Unaligned", s.occurrences ? pct(s.unaligned / s.occurrences, 1) : "–",
-      `${formatCount(s.unaligned)} of ${formatCount(s.occurrences)} word occurrences`),
+    statCard("High", formatCount(s.high), `likely errors${share(s.high)}`, s.high ? "stat-warning" : "stat-ok"),
+    statCard("Medium", formatCount(s.medium), `worth a look${share(s.medium)}`),
+    statCard("Checked", formatCount(s.checked), `sentence pairs; ${formatCount(s.low)} more with minor issues`),
+    statCard("Words", formatCount(s.words), "words that sometimes lack their usual translation"),
   ].join("");
 }
 
-function renderCharts(data) {
+let kindsChart = null;
+
+function renderKinds(s) {
+  const select = document.getElementById("review-kind");
+  if (select && select.options.length === 1) {
+    for (const [kind, label] of s.kinds) select.add(new Option(label[0].toUpperCase() + label.slice(1), kind));
+    select.value = state.kind;
+  }
   if (typeof Chart === "undefined") return;
-  const draw = (key, rows, xTitle) => {
-    charts[key]?.destroy();
-    const canvas = document.getElementById(`chart-${key}`);
-    if (!canvas) return;
-    charts[key] = new Chart(canvas, {
-      type: "bar",
-      data: {
-        labels: rows.map(r => r[0]),
-        datasets: [
-          { label: "Suspicious", data: rows.map(r => r[2]), backgroundColor: "#f0a020", borderRadius: 3 },
-          { label: "Other", data: rows.map(r => r[1] - r[2]), backgroundColor: "#8fb3e0", borderRadius: 3 },
-        ],
+  kindsChart?.destroy();
+  const canvas = document.getElementById("chart-kinds");
+  if (!canvas) return;
+  const kinds = s.kinds;
+  kindsChart = new Chart(canvas, {
+    type: "bar",
+    data: {
+      labels: kinds.map(k => k[1]),
+      datasets: [
+        { label: "High", data: kinds.map(k => k[2]), backgroundColor: "#d9534f", borderRadius: 3 },
+        { label: "Medium", data: kinds.map(k => k[3]), backgroundColor: "#f0a020", borderRadius: 3 },
+      ],
+    },
+    options: {
+      indexAxis: "y",
+      maintainAspectRatio: false,
+      animation: false,
+      plugins: {
+        legend: { position: "bottom", labels: { boxWidth: 12 } },
+        tooltip: { mode: "index", intersect: false },
       },
-      options: {
-        maintainAspectRatio: false,
-        animation: false,
-        plugins: {
-          legend: { position: "bottom", labels: { boxWidth: 12 } },
-          tooltip: { mode: "index", intersect: false },
-        },
-        scales: {
-          x: { stacked: true, title: { display: true, text: xTitle }, grid: { display: false } },
-          y: { stacked: true, beginAtZero: true, title: { display: true, text: "Words" }, ticks: { precision: 0 } },
-        },
+      scales: {
+        x: { stacked: true, beginAtZero: true, title: { display: true, text: "Sentence pairs" }, ticks: { precision: 0 } },
+        y: { stacked: true, grid: { display: false } },
       },
-    });
-  };
-  draw("consistency", data.consistency, "Share of the top translation");
-  draw("frequency", data.frequency, "Occurrences");
+      onClick: (_, elements) => {
+        if (!elements.length) return;
+        state.kind = kinds[elements[0].index][0];
+        document.getElementById("review-kind").value = state.kind;
+        if (state.view !== "sentences") {
+          state.view = "sentences";
+          document.getElementById("review-view-sentences").checked = true;
+          syncViewControls();
+        }
+        state.start = 0;
+        load();
+      },
+    },
+  });
 }
 
-function consistencyBar(row) {
-  const tone = row.consistency < state.thresholds.low_consistency ? "bg-warning" : "bg-success";
-  return `
-    <div class="d-flex align-items-center gap-2">
-      <div class="progress flex-grow-1" style="height: 6px" aria-hidden="true">
-        <div class="progress-bar ${tone}" style="width: ${(100 * row.consistency).toFixed(1)}%"></div>
-      </div>
-      <span class="tabular small" style="min-width: 3em">${pct(row.consistency)}</span>
-    </div>`;
+function renderTopWords(s) {
+  const list = document.getElementById("review-top-words");
+  if (!list) return;
+  if (!s.top_words.length) {
+    list.innerHTML = `<li class="text-muted small">No word stands out.</li>`;
+    return;
+  }
+  list.innerHTML = s.top_words.map(([side, word, count]) => `
+    <li>
+      <a href="#" data-side="${side}" data-word="${escapeHtml(word)}" class="d-flex justify-content-between align-items-center">
+        <span><span class="side-badge side-${side}">${side === "src" ? "SRC" : "TGT"}</span> ${escapeHtml(word)}</span>
+        <span class="text-muted tabular small">${formatCount(count)}×</span>
+      </a>
+    </li>`).join("");
 }
 
-function variantLabel(v) {
-  return v ? escapeHtml(v) : '<span class="text-muted fst-italic">unaligned</span>';
+function segmentsHtml(segments) {
+  return segments.map(([text, flagged]) =>
+    flagged ? `<mark class="issue-mark">${escapeHtml(text)}</mark>` : escapeHtml(text)).join("");
 }
 
-function renderRows(result) {
-  const body = document.getElementById("review-rows");
+function levelBadge(level) {
+  return `<span class="level-badge level-${level}">${LEVEL_LABELS[level] || ""}</span>`;
+}
+
+function renderList(result) {
+  const list = document.getElementById("review-list");
   if (!result.rows.length) {
-    const hint = state.suspiciousOnly ? " Switch off “Suspicious only” to see all words." : "";
-    body.innerHTML = `<tr><td colspan="5" class="text-center text-muted py-4">No words match.${escapeHtml(hint)}</td></tr>`;
+    const hint = state.view === "sentences" && state.level !== "low" ? " Choose “All” to include minor issues." : "";
+    list.innerHTML = `<div class="empty-state"><i class="fas fa-circle-check"></i><p class="mb-0">Nothing found.${escapeHtml(hint)}</p></div>`;
+  } else if (state.view === "sentences") {
+    list.innerHTML = result.rows.map((r, i) => {
+      const labels = [...new Set(r.issues.map(f => f.label))];
+      return `
+      <div class="review-item" data-index="${i}" tabindex="0" role="option">
+        <div class="d-flex justify-content-between align-items-center mb-1">
+          <span>${levelBadge(r.level)} <span class="text-muted small ms-1">line ${formatCount(r.row_id + 1)}</span></span>
+          <span class="text-muted small tabular" title="issue score">${r.score.toFixed(1)}</span>
+        </div>
+        <div class="review-text"><span class="side-badge side-src">SRC</span> ${segmentsHtml(r.src)}</div>
+        <div class="review-text"><span class="side-badge side-tgt">TGT</span> ${segmentsHtml(r.tgt)}</div>
+        <div class="review-chips">
+          ${r.mismatch ? `<span class="chip chip-strong">sides may not belong together</span>` : ""}
+          ${labels.map(l => `<span class="chip">${escapeHtml(l)}</span>`).join("")}
+        </div>
+      </div>`;
+    }).join("");
   } else {
-    body.innerHTML = result.rows.map((r, i) => `
-      <tr data-index="${i}" tabindex="0" class="${state.selected?.word === r.word ? "table-active" : ""}">
-        <td class="fw-semibold">${escapeHtml(r.word)}
-          ${r.suspicious ? `<i class="fas fa-flag text-warning ms-1" title="${escapeHtml(r.reasons.join(", "))}"></i>` : ""}</td>
-        <td class="text-end tabular">${formatCount(r.total)}</td>
-        <td>${consistencyBar(r)}</td>
-        <td class="text-truncate" style="max-width: 12rem">${variantLabel(r.top)}</td>
-        <td class="text-end tabular">${r.num_variants}</td>
-      </tr>`).join("");
+    list.innerHTML = `
+      <table class="table table-hover align-middle mb-0 review-table">
+        <thead><tr>
+          <th scope="col">Word</th>
+          <th scope="col" class="text-end" title="sentence pairs where none of its usual translations appears">Without translation</th>
+          <th scope="col" class="text-end" title="share of its sentences where a usual translation appears">Usually translated</th>
+          <th scope="col">Usual translations</th>
+        </tr></thead>
+        <tbody>${result.rows.map((w, i) => `
+          <tr data-index="${i}" tabindex="0">
+            <td class="fw-semibold"><span class="side-badge side-${w.side}">${w.side === "src" ? "SRC" : "TGT"}</span> ${escapeHtml(w.word)}</td>
+            <td class="text-end tabular">${formatCount(w.flagged)} <span class="text-muted small">/ ${formatCount(w.sentences)}</span></td>
+            <td class="text-end tabular">${pct(w.rate)}</td>
+            <td class="text-truncate" style="max-width: 14rem">${escapeHtml(w.expected.join(", "))}</td>
+          </tr>`).join("")}</tbody>
+      </table>`;
   }
   const end = Math.min(result.filtered, state.start + result.rows.length);
+  const what = state.view === "words" ? "words" : "sentence pairs";
   document.getElementById("review-info").textContent = result.filtered
-    ? `${formatCount(state.start + 1)}–${formatCount(end)} of ${formatCount(result.filtered)} words` +
-      (result.filtered !== result.total ? ` (${formatCount(result.total)} in total)` : "")
-    : `0 of ${formatCount(result.total)} words`;
+    ? `${formatCount(state.start + 1)}–${formatCount(end)} of ${formatCount(result.filtered)} ${what}`
+    : `0 ${what}`;
   document.getElementById("review-prev").disabled = state.start === 0;
   document.getElementById("review-next").disabled = end >= result.filtered;
 }
 
-function sentencesLink(word, variant) {
+function phrasesLink(side, word) {
   const p = new URLSearchParams();
-  if (state.side === "src") { p.set("src", word); if (variant) p.set("tgt", variant); }
-  else { p.set("tgt", word); if (variant) p.set("src", variant); }
+  p.set(side === "tgt" ? "tgt" : "src", word);
   return `#project-${state.projectId}?${p.toString()}`;
 }
 
-function selectWord(row) {
+function markSelected(index) {
+  document.querySelectorAll("#review-list [data-index]").forEach(el =>
+    el.classList.toggle("active", Number(el.dataset.index) === index));
+}
+
+function select(row) {
   state.selected = row;
-  document.querySelectorAll("#review-rows tr[data-index]").forEach(tr =>
-    tr.classList.toggle("table-active", row && state.rows[Number(tr.dataset.index)]?.word === row.word));
+  const index = row ? state.rows.indexOf(row) : -1;
+  markSelected(index);
   const pane = document.getElementById("review-detail");
   if (!pane) return;
   if (!row) {
-    pane.innerHTML = `<div class="card-body empty-state"><i class="fas fa-hand-pointer"></i><p class="mb-0">Select a word to see its translations.</p></div>`;
+    pane.innerHTML = `<div class="card-body empty-state"><i class="fas fa-hand-pointer"></i><p class="mb-0">Select an entry to see why it was flagged.</p></div>`;
     return;
   }
-  const t = state.thresholds;
-  const frequent = row.total >= t.min_total;
-  const criteria = [
-    [row.consistency < t.low_consistency, `Consistency below ${pct(t.low_consistency)}`, pct(row.consistency, 1)],
-    [row.num_variants >= t.many_variants, `${t.many_variants} or more aligned variants`, String(row.num_variants)],
-    [row.unaligned_share >= t.high_unaligned, `${pct(t.high_unaligned)} or more unaligned`, pct(row.unaligned_share, 1)],
-  ];
-  const otherSide = state.side === "src" ? "target" : "source";
-  const variants = row.variants.map(([v, c]) => `
-    <li class="variant">
-      <div class="d-flex justify-content-between align-items-baseline gap-2">
-        <span class="text-break">${variantLabel(v)}</span>
-        <span class="text-nowrap small tabular text-muted">${formatCount(c)} · ${pct(c / row.total, 1)}</span>
-      </div>
-      <div class="progress my-1" style="height: 4px" aria-hidden="true">
-        <div class="progress-bar ${v ? "" : "bg-secondary"}" style="width: ${(100 * c / row.total).toFixed(1)}%"></div>
-      </div>
-      <div class="variant-actions">
-        <a class="btn btn-link btn-sm p-0 me-3" href="${escapeHtml(sentencesLink(row.word, v))}"><i class="fas fa-search me-1"></i>Sentences</a>
-        ${v ? `<button class="btn btn-link btn-sm p-0 text-secondary hide-pair-btn" data-variant="${escapeHtml(v)}"><i class="fas fa-eye-slash me-1"></i>Hide pair</button>` : ""}
-      </div>
-    </li>`).join("");
+  if (state.view === "words") showWord(row, pane);
+  else showSentence(row, pane);
+}
 
+function issueList(issues) {
+  return `<ul class="list-unstyled issue-list mb-0">${issues.map(f => `
+    <li>
+      <i class="fas fa-circle-exclamation ${f.anomaly >= 2 ? "text-danger" : "text-warning"}"></i>
+      <div>
+        <div>${escapeHtml(f.text)}</div>
+        ${f.word && (f.kind === "missing" || f.kind === "unexplained") ? `
+          <a class="small" href="${escapeHtml(phrasesLink(f.side, f.word))}"><i class="fas fa-search me-1"></i>Sentences with “${escapeHtml(f.word)}”</a>` : ""}
+      </div>
+    </li>`).join("")}</ul>`;
+}
+
+function showSentence(row, pane) {
   pane.innerHTML = `
     <div class="card-header d-flex justify-content-between align-items-center">
-      <h5 class="mb-0 text-break">${escapeHtml(row.word)}</h5>
-      ${row.suspicious ? '<span class="badge text-bg-warning"><i class="fas fa-flag me-1"></i>suspicious</span>'
-        : '<span class="badge text-bg-success">consistent</span>'}
+      <h5 class="card-title mb-0">Line ${formatCount(row.row_id + 1)}</h5>
+      ${levelBadge(row.level)}
     </div>
     <div class="card-body">
-      <div class="d-flex flex-wrap gap-3 small text-muted mb-3">
-        <span><strong class="text-body tabular">${formatCount(row.total)}</strong> occurrences</span>
-        <span><strong class="text-body tabular">${pct(row.consistency, 1)}</strong> consistency</span>
-        <span><strong class="text-body tabular">${row.entropy.toFixed(2)}</strong> bits entropy</span>
-      </div>
-      <h6 class="small text-uppercase text-muted">Suspicious criteria</h6>
-      ${frequent ? `<ul class="list-unstyled criteria mb-3">${criteria.map(([met, label, value]) => `
-        <li class="${met ? "met" : ""}"><i class="fas ${met ? "fa-circle-exclamation text-warning" : "fa-circle-check text-success"} me-2"></i>${escapeHtml(label)}
-          <span class="text-muted">(${escapeHtml(value)})</span></li>`).join("")}</ul>`
-        : `<p class="small text-muted">Too rare to judge (fewer than ${t.min_total} occurrences).</p>`}
-      <h6 class="small text-uppercase text-muted">Aligned ${otherSide} words${row.variants.length < row.num_variants + (row.unaligned ? 1 : 0) ? ` (top ${row.variants.length})` : ""}</h6>
-      <ul class="list-unstyled variants mb-3">${variants}</ul>
-      <div class="d-flex flex-wrap gap-2">
-        <a class="btn btn-primary btn-sm" href="${escapeHtml(sentencesLink(row.word, ""))}"><i class="fas fa-search me-1"></i>All sentences</a>
-        <button class="btn btn-outline-secondary btn-sm hide-word-btn" title="Hide this word in the phrase table, whatever its translation">
+      <div class="panel-label">Source</div>
+      <p class="review-text mb-3">${segmentsHtml(row.src)}</p>
+      <div class="panel-label">Target</div>
+      <p class="review-text mb-3">${segmentsHtml(row.tgt)}</p>
+      ${row.mismatch ? `<div class="alert alert-warning small py-2"><i class="fas fa-link-slash me-2"></i>Most words have no counterpart:
+        the two sides may not belong together, or one is a different text.</div>` : ""}
+      <div class="panel-label">Why it was flagged</div>
+      ${issueList(row.issues)}
+    </div>`;
+}
+
+async function showWord(row, pane) {
+  const other = row.side === "src" ? "target" : "source";
+  pane.innerHTML = `
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <h5 class="card-title mb-0 text-break"><span class="side-badge side-${row.side}">${row.side === "src" ? "SRC" : "TGT"}</span> ${escapeHtml(row.word)}</h5>
+      <span class="text-muted small tabular">${formatCount(row.flagged)} of ${formatCount(row.sentences)}</span>
+    </div>
+    <div class="card-body">
+      <p class="small mb-3">Usually ${row.expected.length ? `translated as <strong>${escapeHtml(row.expected.join(", "))}</strong>` : "translated"}:
+        a usual translation appears on the ${other} side in <strong>${pct(row.rate)}</strong> of its sentence pairs.
+        In the pairs below, none does: the word may be untranslated, mistranslated${row.side === "tgt" ? " or added" : ""}.</p>
+      <div class="d-flex flex-wrap gap-2 mb-3">
+        <a class="btn btn-primary btn-sm" href="${escapeHtml(phrasesLink(row.side, row.word))}"><i class="fas fa-search me-1"></i>All sentences</a>
+        <button class="btn btn-secondary btn-sm hide-word-btn" title="Hide this word in the phrase table and in this review">
           <i class="fas fa-eye-slash me-1"></i>Hide word</button>
       </div>
+      <div class="panel-label">Most severe cases</div>
+      <div id="word-examples"><div class="text-muted small"><span class="spinner-border spinner-border-sm me-2"></span>Loading…</div></div>
     </div>`;
+  try {
+    const result = await fetchWordExamples(state.projectId, row.side, row.word);
+    const box = document.getElementById("word-examples");
+    if (!box || state.selected !== row) return;
+    box.innerHTML = result.rows.length ? result.rows.map(r => `
+      <div class="word-example">
+        <div class="d-flex justify-content-between small text-muted mb-1">
+          <span>${levelBadge(r.level)} line ${formatCount(r.row_id + 1)}</span>
+          <span class="tabular">${r.score.toFixed(1)}</span>
+        </div>
+        <div class="review-text"><span class="side-badge side-src">SRC</span> ${segmentsHtml(r.src)}</div>
+        <div class="review-text"><span class="side-badge side-tgt">TGT</span> ${segmentsHtml(r.tgt)}</div>
+      </div>`).join("") : `<div class="text-muted small">No cases.</div>`;
+  } catch (err) {
+    reportError(err);
+  }
 }
 
 async function onDetailClick(e) {
   const row = state.selected;
-  if (!row) return;
-  const pairBtn = e.target.closest(".hide-pair-btn");
-  const wordBtn = e.target.closest(".hide-word-btn");
-  if (!pairBtn && !wordBtn) return;
-  const btn = pairBtn || wordBtn;
+  const btn = e.target.closest(".hide-word-btn");
+  if (!row || !btn) return;
   btn.disabled = true;
   try {
-    const variant = pairBtn ? pairBtn.dataset.variant : "";
-    const [src, tgt] = state.side === "src" ? [row.word, variant] : [variant, row.word];
+    const [src, tgt] = row.side === "src" ? [row.word, ""] : ["", row.word];
     const added = await ignorePhrasePair(state.projectId, src, tgt);
-    const what = pairBtn ? `“${src} ↔ ${tgt}”` : `“${row.word}”`;
-    toast(added ? `${what} is hidden in the phrase table.` : `${what} was already hidden.`, "success",
+    toast(added ? `“${row.word}” is hidden in the phrase table and the review.` : `“${row.word}” was already hidden.`, "success",
       { action: { label: "Phrases", href: `#project-${state.projectId}` } });
-    if (wordBtn) { state.selected = null; await load(); }
+    state.selected = null;
+    await load();
   } catch (err) {
     reportError(err);
   } finally {
@@ -461,20 +536,22 @@ function renderSidebar() {
   const sidebar = document.getElementById("sidebar-content");
   if (!sidebar) return;
   sidebar.innerHTML = `
-    <div class="p-3">
-      <h5 class="mb-3"><i class="fas fa-magnifying-glass-chart text-primary me-2"></i>Word review</h5>
-      <p class="small">For every word, AlignFix looks at what each of its occurrences is aligned to.
-        <strong>Consistency</strong> is the share of the most common translation among all occurrences
-        (unaligned occurrences included).</p>
-      <p class="small mb-1">A word with at least 10 occurrences is <strong>suspicious</strong> if</p>
-      <ul class="small">
-        <li>its consistency is below 75%,</li>
-        <li>it has 4 or more different aligned translations, or</li>
-        <li>20% or more of its occurrences are unaligned.</li>
-      </ul>
-      <p class="small">Inconsistent words can be legitimately ambiguous, but often point to wrong or
-        missing translations. Use <em>Sentences</em> to inspect them and fix them on the Phrases page.</p>
-      <p class="small mb-0"><strong>Hide</strong> removes a word (any translation) or a pair from the phrase
-        table; the hidden list on the Phrases page can undo it.</p>
-    </div>`;
+    <h5><i class="fas fa-magnifying-glass-chart text-primary me-2"></i>Review</h5>
+    <p>AlignFix learns from the alignments which translations each word usually has, and how often at
+      least one of them appears on the other side. A pair is flagged when a word lacks all of them
+      although it nearly always has one: that points to an omission, a mistranslation or an addition.</p>
+    <p>Words translated in several valid ways are <strong>not</strong> flagged: synonyms count as usual
+      translations, and words that are often paraphrased are expected to lack them.</p>
+    <h6>Also checked</h6>
+    <ul>
+      <li>numbers on one side only,</li>
+      <li>repetitions in the target,</li>
+      <li>unusual length ratios,</li>
+      <li>untranslated copies.</li>
+    </ul>
+    <h6>Severity</h6>
+    <p><strong>High</strong> pairs are likely errors, <strong>medium</strong> ones worth a look. Fix them
+      on the Phrases page (<em>Sentences with …</em> opens it with the word searched).</p>
+    <p class="mb-0"><strong>Words</strong> lists the words that most often lack their translation, with
+      their worst cases. <strong>Hide word</strong> excludes a word here and in the phrase table.</p>`;
 }
