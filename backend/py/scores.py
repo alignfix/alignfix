@@ -6,7 +6,7 @@ from db import get_db
 from projects import get_alignment_row_ids
 from statistics import median
 
-from lexicon import Lexicon, normalize, is_content
+from lexicon import Lexicon, normalize, is_content, consistency_anomalies, consistency_score
 
 
 def write_scores(project_id, scores, row_ids=None):
@@ -109,6 +109,65 @@ def assign_auto_scores(project_id):
         print("Error occurred while assigning automatic scores:", e)
 
     return False
+
+# Lexicon of the last consistency run per project, reused to explain single rows.
+_consistency_lexicons = {}
+
+
+def assign_consistency_scores(project_id):
+    """
+    Alignment consistency: flags sentence pairs containing words that behave
+    unlike they usually do in the corpus - left unaligned although they are
+    usually aligned, or without any of their usual translations on the other
+    side (possible omission, mistranslation or hallucinated addition).
+    1 = consistent, lower = more suspicious; see lexicon.consistency_anomalies.
+    """
+    try:
+        rows = get_active_rows(project_id)
+        lex = Lexicon.build((line1, line2, align) for _, line1, line2, align in rows)
+        _consistency_lexicons[project_id] = lex
+
+        print(f"Calculating alignment consistency for {len(rows)} alignments.")
+
+        scores = []
+        flagged_rows = 0
+        for _, line1, line2, align in rows:
+            flagged = consistency_anomalies(lex, line1, line2, align)
+            flagged_rows += bool(flagged)
+            scores.append(round(consistency_score(flagged), 5))
+
+        print(f"{flagged_rows} of {len(rows)} sentence pairs contain unexpected tokens.")
+        write_scores(project_id, scores, row_ids=[row[0] for row in rows])
+        return True
+
+    except sqlite3.Error as e:
+        print("Error occurred while assigning consistency scores:", e)
+
+    return False
+
+
+def explain_consistency(project_id, row_id, build=False):
+    """
+    Anomalous tokens of one row. Uses the lexicon of the last consistency run in
+    this session; without one, returns None unless build=True (slow on large corpora).
+    """
+    lex = _consistency_lexicons.get(project_id)
+    if lex is None:
+        if not build:
+            return None
+        rows = get_active_rows(project_id)
+        lex = Lexicon.build((line1, line2, align) for _, line1, line2, align in rows)
+        _consistency_lexicons[project_id] = lex
+
+    _, cursor = get_db()
+    cursor.execute(
+        "SELECT line1, line2, alignment FROM alignments WHERE project_id = ? AND row_id = ?",
+        (project_id, row_id))
+    row = cursor.fetchone()
+    if not row:
+        return []
+    return consistency_anomalies(lex, *row)
+
 
 def get_scores(project_id):
     conn, cursor = get_db()

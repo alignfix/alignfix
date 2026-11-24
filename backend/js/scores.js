@@ -53,6 +53,39 @@ export async function assignAutoScores(project_id) {
   return;
 }
 
+export async function assignConsistencyScores(project_id) {
+  const pyodide = await initPyodide();
+
+  console.log("Assigning alignment consistency scores for project:", project_id);
+
+  pyodide.globals.set("project_id", project_id);
+
+  await pyodide.runPythonAsync(`
+    from scores import assign_consistency_scores
+    assign_consistency_scores(project_id)
+  `);
+
+  await safeSyncfs(pyodide);
+  return;
+}
+
+/**
+ * Unexpected tokens of one row from the last consistency run in this session,
+ * or null if consistency scores were not computed since the page was loaded.
+ */
+export async function explainConsistency(project_id, row_id) {
+  const pyodide = await initPyodide();
+  pyodide.globals.set("project_id", project_id);
+  pyodide.globals.set("row_id", parseInt(row_id));
+
+  const result = await pyodide.runPythonAsync(`
+    import json
+    from scores import explain_consistency
+    json.dumps(explain_consistency(project_id, row_id))
+  `);
+  return JSON.parse(result);
+}
+
 async function computeStabilityScores(project_id, numCores) {
   
   const pyodide = await initPyodide(); 

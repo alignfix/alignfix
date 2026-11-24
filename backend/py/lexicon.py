@@ -26,6 +26,9 @@ MIN_SUPPORT = 20
 # Additive smoothing of the aligned rate r(w) = (a + ALPHA) / (n + ALPHA + BETA).
 ALPHA = 1.0
 BETA = 1.0
+# Translations kept per word for presence checks: p >= MIN_TRANSLATION_PROB, at most MAX_TRANSLATIONS.
+MIN_TRANSLATION_PROB = 0.01
+MAX_TRANSLATIONS = 20
 
 
 def normalize(token):
@@ -59,8 +62,8 @@ class Side:
 
         # filled by finalize()
         self.rate = {}             # r(w)
-        self.translations = {}     # w -> {partner: p(partner | w)}
-        self.entropy = {}          # H(O(w)) in nats
+        self.translations = {}     # w -> {partner: p(partner | w)}, pruned
+        self.entropy = {}          # H(O(w)) in nats, from the unpruned distribution
 
     def finalize(self, min_support):
         for w, n in self.count.items():
@@ -71,8 +74,9 @@ class Side:
             total = sum(partners.values()) if partners else 0
             probs = {t: c / total for t, c in partners.items()} if total else {}
             self.rate[w] = r
-            self.translations[w] = probs
             self.entropy[w] = _entropy([1 - r] + [r * p for p in probs.values()])
+            top = sorted(probs.items(), key=lambda kv: kv[1], reverse=True)[:MAX_TRANSLATIONS]
+            self.translations[w] = {t: p for t, p in top if p >= MIN_TRANSLATION_PROB}
         # raw link counts are no longer needed
         self.links = None
 
@@ -92,8 +96,8 @@ class Lexicon:
         lex = cls(min_support)
         rows = list(rows)
 
-        # Pass 1: unigram counts, so link counts can be restricted to supported
-        # words (keeps memory bounded on large corpora).
+        # Pass 1: unigram counts, so link counts are only kept for words that will
+        # get statistics (keeps memory bounded on large corpora).
         for line1, line2, _ in rows:
             for tok in line1.split():
                 if is_content(tok):
@@ -124,10 +128,82 @@ class Lexicon:
                 ws, wt = src[s], tgt[t]
                 if ws is None or wt is None:
                     continue
-                if ws in src_ok and wt in tgt_ok:
+                if ws in src_ok:
                     lex.src.links[ws][wt] += 1
+                if wt in tgt_ok:
                     lex.tgt.links[wt][ws] += 1
 
         lex.src.finalize(min_support)
         lex.tgt.finalize(min_support)
         return lex
+
+
+def _binary_entropy(r):
+    return _entropy([r, 1 - r])
+
+
+def _side_anomalies(side, tokens, partner_present, aligned, side_name):
+    """
+    Per-token anomalies for one side, in nats above what is typical for the word:
+
+    - unaligned: w is left unaligned although it is usually aligned
+          -log(1 - r) - H_b(r)
+    - missing:   none of w's usual translations occurs anywhere in the other
+                 side (independent of the alignment, so it also catches words
+                 force-aligned to the wrong partner)
+          -log((1 - r) + r * q) - H(O(w)),  q = Σ p(t|w) over t present
+    """
+    flagged = []
+    for i, tok in enumerate(tokens):
+        if not is_content(tok):
+            continue
+        w = normalize(tok)
+        if not side.supported(w):
+            continue
+
+        r = side.rate[w]
+        unaligned = 0.0
+        if i not in aligned:
+            unaligned = -math.log(1 - r) - _binary_entropy(r)
+
+        missing = 0.0
+        translations = side.translations[w]
+        if translations:
+            if len(translations) <= len(partner_present):
+                q = sum(p for t, p in translations.items() if t in partner_present)
+            else:
+                q = sum(translations.get(t, 0.0) for t in partner_present)
+            consistent = (1 - r) + r * min(q, 1.0)
+            n = side.count[w]
+            missing = -math.log(max(consistent, 1.0 / (n + 2))) - side.entropy[w]
+
+        anomaly = max(unaligned, missing)
+        if anomaly > 0:
+            flagged.append({
+                "side": side_name,
+                "index": i,
+                "token": tok,
+                "kind": "unaligned" if unaligned >= missing else "missing",
+                "anomaly": round(anomaly, 3),
+            })
+    return flagged
+
+
+def consistency_anomalies(lex, line1, line2, alignment):
+    """All anomalous tokens of a sentence pair, most anomalous first."""
+    src = line1.split()
+    tgt = line2.split()
+    links = _parse_links(alignment, len(src), len(tgt))
+    src_present = {normalize(t) for t in src if is_content(t)}
+    tgt_present = {normalize(t) for t in tgt if is_content(t)}
+
+    flagged = _side_anomalies(lex.src, src, tgt_present, {s for s, _ in links}, "src")
+    flagged += _side_anomalies(lex.tgt, tgt, src_present, {t for _, t in links}, "tgt")
+    flagged.sort(key=lambda f: f["anomaly"], reverse=True)
+    return flagged
+
+
+def consistency_score(flagged):
+    """1 = nothing unexpected; decreases with the largest token anomaly A: 1 / (1 + A)."""
+    worst = flagged[0]["anomaly"] if flagged else 0.0
+    return 1.0 / (1.0 + worst)

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { importScoresFromFile, assignAutoScores, assignStabilityScores, getScores, getAlignmentsWithScores } from "../backend/js/scores.js";
+import { importScoresFromFile, assignAutoScores, assignStabilityScores, assignConsistencyScores, explainConsistency, getScores, getAlignmentsWithScores } from "../backend/js/scores.js";
 import { bindAsyncButton } from "./utils.js";
 
 /**
@@ -74,6 +74,10 @@ export async function renderScores(projectId) {
                   <button id="assign-stability-scores-btn" class="btn btn-secondary">
                     <i class="fas fa-link me-2"></i>
                     Alignment Stability
+                  </button>
+                  <button id="assign-consistency-scores-btn" class="btn btn-secondary">
+                    <i class="fas fa-search me-2"></i>
+                    Alignment Consistency
                   </button>
                 </div>
               </div>
@@ -228,6 +232,11 @@ export async function renderScores(projectId) {
                     <i class="fas fa-link me-1"></i>Alignment Stability Index
                   </button>
                 </li>
+                <li class="nav-item" role="presentation">
+                  <button class="nav-link" id="consistency-tab" data-bs-toggle="tab" data-bs-target="#consistency" type="button" role="tab">
+                    <i class="fas fa-search me-1"></i>Alignment Consistency
+                  </button>
+                </li>
               </ul>
               <div class="tab-content p-3" id="metricsTabContent">
                 <!-- Translation Clarity Tab -->
@@ -288,6 +297,41 @@ export async function renderScores(projectId) {
                     <span class="badge bg-success">0.8+ - Excellent</span>
                   </div>
                 </div>
+
+                <!-- Alignment Consistency Tab -->
+                <div class="tab-pane fade" id="consistency" role="tabpanel">
+                  <h5>Alignment Consistency</h5>
+                  <p>This metric flags sentence pairs containing words that <strong>behave unlike they usually do in the corpus</strong>:
+                    possible omissions, mistranslations or hallucinated additions. Low scores are worth reviewing.</p>
+
+                  <h6>Checks per word (both sides, words seen at least 20 times):</h6>
+                  <ul>
+                    <li><strong>Unexpectedly unaligned:</strong> the word is left unaligned although it is aligned in most other sentences.</li>
+                    <li><strong>Expected translation missing:</strong> none of the word's usual translations occurs anywhere on the other side.
+                      This does not rely on the alignment of the sentence, so it also catches words aligned to the wrong partner.</li>
+                  </ul>
+                  <p class="small">Each check measures how much more surprising the observation is than what is typical for that word,
+                    so ambiguous words (many valid translations) and words that are often legitimately dropped are not flagged.</p>
+
+                  <h6>Formula:</h6>
+                  <div class="bg-light p-3 rounded mb-2">
+                    <code>unaligned(w) = −log(1 − r) − H_b(r)</code><br>
+                    <code>missing(w) = −log((1 − r) + r · Σ p(t|w) for t present) − H(w)</code><br>
+                    <code>Consistency(S) = 1 / (1 + max anomaly over the words of S)</code>
+                  </div>
+                  <p class="small">
+                    Where <code>r</code> is how often <code>w</code> is aligned at all, <code>p(t|w)</code> the share of its links going to <code>t</code>,
+                    <code>H_b</code> the binary entropy and <code>H(w)</code> the entropy of the word's translations (see Translation Clarity).
+                    Open a sentence pair to see which tokens were flagged.
+                  </p>
+
+                  <h6>Score Range:</h6>
+                  <div class="d-flex align-items-center gap-3 mt-2">
+                    <span class="badge bg-danger">&lt; 0.2 - Very unexpected</span>
+                    <span class="badge bg-warning">0.2 - 0.5 - Suspicious</span>
+                    <span class="badge bg-success">1.0 - Consistent</span>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -324,6 +368,12 @@ export async function renderScores(projectId) {
               <div class="col-12">
                 <label class="form-label fw-bold">Target Text:</label>
                 <div id="modal-target-text" class="p-3 bg-light border rounded"></div>
+              </div>
+            </div>
+            <div class="row mb-3">
+              <div class="col-12">
+                <label class="form-label fw-bold">Unexpected Tokens:</label>
+                <div id="modal-consistency" class="small"></div>
               </div>
             </div>
             <div class="row">
@@ -509,6 +559,17 @@ export async function renderScores(projectId) {
     }
   );
 
+  // Assign consistency scores button
+  bindAsyncButton(
+    document.getElementById("assign-consistency-scores-btn"),
+    async () => {
+      await assignConsistencyScores(projectId);
+      await plotScoresHistogram();
+      await loadAlignments();
+      console.log("Alignment consistency scores assigned successfully");
+    }
+  );
+
   // Assign stability scores button
   bindAsyncButton(
     document.getElementById("assign-stability-scores-btn"),
@@ -668,6 +729,44 @@ export async function renderScores(projectId) {
     }).join(' ');
   }
 
+  function escapeHtml(text) {
+    return String(text).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  // Show tokens flagged by the last consistency run and underline them in the texts
+  async function showConsistencyDetails(id) {
+    const container = document.getElementById('modal-consistency');
+    container.innerHTML = '<span class="text-muted">Loading…</span>';
+    try {
+      const flagged = await explainConsistency(projectId, id);
+      if (flagged === null) {
+        container.innerHTML = '<span class="text-muted">Run <strong>Alignment Consistency</strong> to see unexpected tokens.</span>';
+        return;
+      }
+      if (flagged.length === 0) {
+        container.innerHTML = '<span class="text-success">No unexpected tokens.</span>';
+        return;
+      }
+      const labels = { unaligned: "unaligned, usually aligned", missing: "usual translations missing" };
+      container.innerHTML = flagged.map(f =>
+        `<span class="badge bg-${f.anomaly >= 1 ? 'danger' : 'warning text-dark'} me-1 mb-1"
+               title="${f.side === 'src' ? 'Source' : 'Target'} token ${f.index}: ${labels[f.kind]}">
+           ${f.side === 'src' ? 'Source' : 'Target'}: ${escapeHtml(f.token)} · ${labels[f.kind]} · ${f.anomaly.toFixed(2)}
+         </span>`
+      ).join('');
+      for (const f of flagged) {
+        const el = document.querySelector(`.${f.side}-word[data-idx="${f.index}"]`);
+        if (el) {
+          el.style.textDecoration = 'underline wavy #dc3545';
+          el.title = labels[f.kind];
+        }
+      }
+    } catch (error) {
+      console.error('Error explaining consistency:', error);
+      container.innerHTML = `<span class="text-danger">Error: ${escapeHtml(error.message)}</span>`;
+    }
+  }
+
   // Function to show alignment modal
   function showAlignmentModal(id, srcText, tgtText, alignment, score) {
     document.getElementById('modal-alignment-id').textContent = id;
@@ -676,6 +775,7 @@ export async function renderScores(projectId) {
     // Render interactive text
     document.getElementById('modal-source-text').innerHTML = renderInteractiveText(srcText, 'src');
     document.getElementById('modal-target-text').innerHTML = renderInteractiveText(tgtText, 'tgt');
+    showConsistencyDetails(id);
     
     // Render raw alignment string above the visualization
     const alignmentDisplay = alignment || 'No alignment data';
