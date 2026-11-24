@@ -505,6 +505,10 @@ async def apply_fixes(project_id, fixes):
             print("🧹 Cleaning up phrases without occurrences")
             delete_phrases_without_occurrence(project_id)
 
+            # phrase pairs created by the fixes are subject to the hide list too
+            from phrases import apply_ignore_rules
+            apply_ignore_rules(project_id)
+
     total_duration = time.time() - start_time
 
     print(f"🎉 Fix application completed in {total_duration:.2f} seconds")

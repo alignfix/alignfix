@@ -370,24 +370,105 @@ def save_phrases(project_id, phrases,
                 raise
                  
 
-def add_phrases_to_ignore(project_id, phrases):
-    conn, cursor = get_db()
+# ---------------------------------------------------------------- hide list
+#
+# phrases.ignore: 0 = shown, 1 = hidden by the user (that pair only),
+# 2 = hidden by an entry of the hide list (table `ignored`). Hide-list entries
+# are tokenised and compared case-insensitively:
+#   src + tgt      hides that pair
+#   src, tgt = ''  hides the source phrase whatever its translation (wildcard)
+#   src = '', tgt  hides the target phrase whatever its source (wildcard)
+# and a multi-word phrase is hidden when each of its words is hidden by a
+# single-word wildcard on that side ("der die" if "der" and "die" are hidden).
+# ignore=2 is recomputed by apply_ignore_rules() whenever the list or the
+# phrases change, so removing an entry shows its phrases again.
 
+HIDDEN_BY_USER = 1
+HIDDEN_BY_LIST = 2
+
+
+def _fold(tok_str):
+    return " ".join((tok_str or "").split()).casefold()
+
+
+def add_phrases_to_ignore(project_id, phrases):
+    """phrases: dicts with tokenised src_phrase / tgt_phrase (either may be '').
+    Returns the number of new entries (duplicates are skipped)."""
+    conn, cursor = get_db()
+    rows = []
     for phrase in phrases:
-        cursor.execute('INSERT INTO ignored (src_phrase, tgt_phrase, project_id) VALUES (?, ?, ?)',
-                  (phrase['src_phrase'], phrase['tgt_phrase'], project_id))
-    
+        src = " ".join((phrase.get('src_phrase') or "").split())
+        tgt = " ".join((phrase.get('tgt_phrase') or "").split())
+        if src or tgt:
+            rows.append((src, tgt, project_id))
+    before = conn.total_changes
+    cursor.executemany(
+        'INSERT OR IGNORE INTO ignored (src_phrase, tgt_phrase, project_id) VALUES (?, ?, ?)', rows)
+    added = conn.total_changes - before
     conn.commit()
+    apply_ignore_rules(project_id)
+    return added
+
+
+def ignore_phrase_pair(project_id, src_phrase, tgt_phrase=""):
+    """Add one (untokenised) entry to the hide list; tgt '' hides src everywhere."""
+    return add_phrases_to_ignore(project_id, [{
+        "src_phrase": tokenise(src_phrase, as_string=True) if src_phrase else "",
+        "tgt_phrase": tokenise(tgt_phrase, as_string=True) if tgt_phrase else "",
+    }])
+
 
 def remove_phrase_to_ignore(project_id, phrase_id):
     conn, cursor = get_db()
     cursor.execute('DELETE FROM ignored WHERE id=? AND project_id=?', (phrase_id, project_id))
     conn.commit()
+    apply_ignore_rules(project_id)
+
+
+def apply_ignore_rules(project_id):
+    """Set phrases.ignore=2 for exactly the phrases the hide list matches.
+    Returns the number of phrases hidden by the list."""
+    conn, cursor = get_db()
+    cursor.execute('SELECT src_phrase, tgt_phrase FROM ignored WHERE project_id=?', (project_id,))
+    pairs, any_src, any_tgt = set(), set(), set()
+    for src, tgt in cursor.fetchall():
+        s, t = _fold(src), _fold(tgt)
+        if s and t:
+            pairs.add((s, t))
+        elif s:
+            any_src.add(s)
+        elif t:
+            any_tgt.add(t)
+    words_src = {w for w in any_src if " " not in w}
+    words_tgt = {w for w in any_tgt if " " not in w}
+
+    def hidden(s, t):
+        if (s, t) in pairs or s in any_src or t in any_tgt:
+            return True
+        ws, wt = s.split(), t.split()
+        return (len(ws) > 1 and all(w in words_src for w in ws)) or \
+               (len(wt) > 1 and all(w in words_tgt for w in wt))
+
+    cursor.execute('SELECT id, src_phrase, tgt_phrase, ignore FROM phrases '
+                   'WHERE project_id=? AND ignore IN (0, 2)', (project_id,))
+    show, hide = [], []
+    for pid, src, tgt, flag in cursor.fetchall():
+        h = bool(pairs or any_src or any_tgt) and hidden(_fold(src), _fold(tgt))
+        if h and flag != HIDDEN_BY_LIST:
+            hide.append((pid,))
+        elif not h and flag == HIDDEN_BY_LIST:
+            show.append((pid,))
+    cursor.executemany(f'UPDATE phrases SET ignore={HIDDEN_BY_LIST} WHERE id=?', hide)
+    cursor.executemany('UPDATE phrases SET ignore=0 WHERE id=?', show)
+    conn.commit()
+    cursor.execute('SELECT COUNT(*) FROM phrases WHERE project_id=? AND ignore=?',
+                   (project_id, HIDDEN_BY_LIST))
+    return cursor.fetchone()[0]
     
 
 def get_phrases_to_ignore(project_id):
     _, cursor = get_db()
-    cursor.execute('SELECT id, src_phrase, tgt_phrase FROM ignored WHERE project_id=?', (project_id,))
+    cursor.execute('SELECT id, src_phrase, tgt_phrase FROM ignored WHERE project_id=? ORDER BY id', (project_id,))
     rows = cursor.fetchall()
 
     return rows
@@ -397,13 +478,15 @@ def delete_all_ignored_phrases(project_id):
 
     cursor.execute('DELETE FROM ignored WHERE project_id=?', (project_id,))
     conn.commit()
+    apply_ignore_rules(project_id)
 
 
 def get_all_phrases_to_ignore(project_id):
     imported_phrase = get_phrases_to_ignore(project_id)
     rows = set()
     for (id, src, tgt) in imported_phrase:
-        rows.add((src, tgt))
+        if src and tgt:   # wildcards are applied after extraction (apply_ignore_rules)
+            rows.add((src, tgt))
 
     _, cursor = get_db()
 
@@ -516,7 +599,7 @@ def fetch_ignored_phrases(project_id, start, length):
     # Collect all ignored phrases from both sources
     all_phrases = []
 
-    # 1) Get phrases from phrases table where ignore=1
+    # 1) Get phrases hidden one by one (not those hidden by the list)
     cursor.execute("""SELECT id, src_phrase, tgt_phrase, 0 as imported
                       FROM phrases
                       WHERE project_id=? AND ignore=1
@@ -524,9 +607,9 @@ def fetch_ignored_phrases(project_id, start, length):
     phrases_ignored = cursor.fetchall()
     all_phrases.extend(phrases_ignored)
 
-    # 2) Get additional phrases from ignored table
+    # 2) Then the entries of the hide list (newest first)
     additional_phrases = get_phrases_to_ignore(project_id)
-    for (id, src, tgt) in additional_phrases:
+    for (id, src, tgt) in reversed(additional_phrases):
         all_phrases.append((id, src, tgt, 1))  # 1 = imported
     
     # 3) Calculate total count
@@ -550,28 +633,81 @@ def fetch_ignored_phrases(project_id, start, length):
     return phrase_ids, src_phrases, tgt_phrases, imported, total_records
 
 
+def export_ignore_list(project_id):
+    """The hide list and the pairs hidden one by one, as {src, tgt} (untokenised;
+    '' = any), in the format import_ignored_from_file reads."""
+    _, cursor = get_db()
+    seen, out = set(), []
+    cursor.execute('SELECT src_phrase, tgt_phrase FROM ignored WHERE project_id=? ORDER BY id', (project_id,))
+    rows = cursor.fetchall()
+    cursor.execute('SELECT src_phrase, tgt_phrase FROM phrases WHERE project_id=? AND ignore=? '
+                   'ORDER BY num_occurrences DESC', (project_id, HIDDEN_BY_USER))
+    rows += cursor.fetchall()
+    for src, tgt in rows:
+        if (src, tgt) in seen:
+            continue
+        seen.add((src, tgt))
+        out.append({"src": detokenise(src) if src else "", "tgt": detokenise(tgt) if tgt else ""})
+    return out
+
+
+def parse_ignore_list(file_content):
+    """
+    Entries of a hide-list file, as (src, tgt) pairs of untokenised text:
+
+    - JSON: a list of {"src": ..., "tgt": ...}; a missing or empty side is a
+      wildcard ("hide this word whatever it is aligned to").
+    - Plain text: one entry per line, "#" starts a comment; "src<TAB>tgt" or
+      "src ||| tgt" is a pair, a line without separator is a source wildcard.
+    """
+    text = (file_content or "").lstrip("\ufeff")
+    stripped = text.strip()
+    if stripped.startswith("[") or stripped.startswith("{"):
+        try:
+            data = json.loads(stripped)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"The file is not valid JSON (line {e.lineno}: {e.msg}).")
+        if not isinstance(data, list):
+            raise ValueError('Expected a JSON list like [{"src": "...", "tgt": "..."}].')
+        entries = []
+        for i, item in enumerate(data, 1):
+            if not isinstance(item, dict):
+                raise ValueError(f"Entry {i} is not an object with src/tgt.")
+            src = str(item.get("src") or "").strip()
+            tgt = str(item.get("tgt") or "").strip()
+            if src or tgt:
+                entries.append((src, tgt))
+        return entries
+
+    entries = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "\t" in line:
+            src, tgt = line.split("\t", 1)
+        elif "|||" in line:
+            src, tgt = line.split("|||", 1)
+        else:
+            src, tgt = line, ""
+        src, tgt = src.strip(), tgt.strip()
+        if src or tgt:
+            entries.append((src, tgt))
+    return entries
+
+
 def import_ignored_from_file(project_id, file_content):
-    
-    try:
-        ignored_phrases = json.loads(file_content)
-        if not isinstance(ignored_phrases, list):
-            print("Invalid format: JSON is not a list")
-            return 0
-        
-        phrases = []
-        for phrase in ignored_phrases:
-            src_phrase = tokenise(phrase.get("src", ""), as_string=True)
-            tgt_phrase = tokenise(phrase.get("tgt", ""), as_string=True)
-            phrases.append({"src_phrase": src_phrase, "tgt_phrase": tgt_phrase})
-        
-        add_phrases_to_ignore(project_id, phrases)
-        print(f"Imported {len(phrases)} ignored phrases for project {project_id}")
-
-        return len(phrases)
-
-    except json.JSONDecodeError as e:
-        print(f"JSON decode error: {e}")
-        return 0
+    """Add the entries of a hide-list file. Returns (entries in file, new entries)."""
+    entries = parse_ignore_list(file_content)
+    if not entries:
+        raise ValueError("The file contains no entries.")
+    phrases = [{
+        "src_phrase": tokenise(src, as_string=True) if src else "",
+        "tgt_phrase": tokenise(tgt, as_string=True) if tgt else "",
+    } for src, tgt in entries]
+    added = add_phrases_to_ignore(project_id, phrases)
+    print(f"Hide list: {len(entries)} entries read, {added} new, for project {project_id}")
+    return len(entries), added
 
 def get_all_phrases(project_id):
     """

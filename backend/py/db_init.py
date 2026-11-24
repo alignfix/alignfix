@@ -113,6 +113,18 @@ CREATE INDEX IF NOT EXISTS idx_occurrences_row
 ON occurrences (row_id, project_id)
 """)
 
+# One entry per (project, src, tgt) in the hide list: remove duplicates left by
+# older versions (keeping the first), then let the index prevent new ones.
+c.execute("""
+DELETE FROM ignored WHERE id NOT IN (
+    SELECT MIN(id) FROM ignored GROUP BY project_id, src_phrase, tgt_phrase
+)
+""")
+c.execute("""
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ignored_unique
+ON ignored (project_id, src_phrase, tgt_phrase)
+""")
+
 c.execute("""
 CREATE INDEX IF NOT EXISTS idx_fixes_lookup
 ON fixes (src_phrase, tgt_phrase, direction, project_id)

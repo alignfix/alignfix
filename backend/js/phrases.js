@@ -483,11 +483,20 @@ export async function extractPhrases(project_id) {
         const endSaveTime = performance.now();
         console.log(`💾 Saved ${phrases.length.toLocaleString()} phrase pairs in ${((endSaveTime - startSaveTime) / 1000).toFixed(1)}s`);
 
+        report(0.9, "applying the hide list");
+        await yieldToUI();
+        const hiddenByList = await pyodide.runPythonAsync(`
+          from phrases import apply_ignore_rules
+          apply_ignore_rules(project_id)
+        `);
+        stats_obj.total_ignored_phrases = hiddenByList;
+        if (hiddenByList) console.log(`🙈 ${hiddenByList.toLocaleString()} phrase pairs hidden by the hide list`);
+
         // add to stats duration of delete and save
         stats_obj.db_delete_duration_seconds = (endDeleteTime - startDeleteTime) / 1000;
         stats_obj.db_insert_duration_seconds = (endSaveTime - startSaveTime) / 1000;
 
-        report(0.9, "writing to browser storage");
+        report(0.95, "writing to browser storage");
         await safeSyncfs(pyodide);
     });
     return stats_obj;
@@ -629,55 +638,71 @@ export async function setIgnorePhrase(project_id, phrase_id, ignore, imported) {
   await safeSyncfs(pyodide);
 }
 
+/**
+ * Add the entries of a hide-list file (JSON list of {src, tgt}, or text with
+ * one word/phrase per line, "src<TAB>tgt" for pairs).
+ * Returns { read, added }; throws a readable Error for malformed files.
+ */
 export async function importIgnoredFromFile(project_id, fileContent) {
   const pyodide = await initPyodide();
 
   pyodide.globals.set("file_content", fileContent);
   pyodide.globals.set("project_id", project_id);
 
-  await pyodide.runPythonAsync(`
+  let result;
+  try {
+    result = await pyodide.runPythonAsync(`
       from phrases import import_ignored_from_file
-      import_ignored_from_file(project_id, file_content)
-  `);
+      list(import_ignored_from_file(project_id, file_content))
+    `);
+  } catch (err) {
+    const match = /ValueError: (.*)/.exec(err.message || "");
+    throw match ? new Error(match[1]) : err;
+  } finally {
+    pyodide.globals.delete("file_content");
+  }
+  const [read, added] = result.toJs();
+  result.destroy();
 
   await safeSyncfs(pyodide);
-  return;
+  return { read, added };
+}
+
+/** Hide a pair, or with tgt '' the source phrase whatever its translation (src '' likewise). */
+export async function ignorePhrasePair(project_id, src_phrase, tgt_phrase = "") {
+  const pyodide = await initPyodide();
+  pyodide.globals.set("ip_args", pyodide.toPy([parseInt(project_id), src_phrase || "", tgt_phrase || ""]));
+  const added = await pyodide.runPythonAsync(`
+      from phrases import ignore_phrase_pair
+      ignore_phrase_pair(*ip_args)
+  `);
+  pyodide.globals.delete("ip_args");
+  await safeSyncfs(pyodide);
+  return added;
 }
 
 export async function downloadIgnoredPhrases(project_id) {
-  
   const pyodide = await initPyodide();
-
   pyodide.globals.set("project_id", project_id);
-  
   const response = await pyodide.runPythonAsync(`
-      from phrases import get_all_phrases_to_ignore
-      data = get_all_phrases_to_ignore(project_id)
-      list(data)
-`);
+      import json
+      from phrases import export_ignore_list
+      json.dumps(export_ignore_list(project_id), ensure_ascii=False)
+  `);
+  const blob = new Blob([JSON.stringify(JSON.parse(response), null, 2)], { type: 'application/json' });
+  downloadBlob(blob, `hidden_phrases_project_${project_id}.json`);
+}
 
-  // Convert PyProxy to JS array of arrays
-  const dataObj = response.toJs().map(t => Array.from(t));  // each tuple -> JS array
-
-  // dataObj is a list of tuples (src_phrase, tgt_phrase), trasnform to list of dicts with src and tgt key
-  const transformedData = dataObj.map(item => ({
-    src: item[0],
-    tgt: item[1]
-  }));
-
-  // create JSON file and download
-  const jsonStr = JSON.stringify(transformedData, null, 2);
-  const blob = new Blob([jsonStr], { type: 'application/json' });
-
-  // create a link to download the JSON file
+/** Save a Blob as a file (the object URL is released afterwards). */
+export function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `ignored_phrases_project_${project_id}.json`;
+  a.download = filename;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
 export async function downloadPhrases(project_id) {

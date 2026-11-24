@@ -148,8 +148,13 @@ export async function renderProject(id) {
             <div class="accordion-body">
 
               <div class="mb-3">
-                <label for="ignored-file-input" class="form-label">Upload file</label>
-                <input class="form-control" type="file" id="ignored-file-input" name="file">
+                <label for="ignored-file-input" class="form-label">Import a hide list</label>
+                <input class="form-control" type="file" id="ignored-file-input" name="file" accept=".txt,.tsv,.json,text/plain,application/json">
+                <div class="form-text">
+                  A word list (<code>.txt</code>, one word or phrase per line) hides those source phrases
+                  whatever their translation; <code>src&lt;TAB&gt;tgt</code> lines hide pairs. JSON exported
+                  here works too. A phrase made only of hidden words is hidden as well.
+                </div>
               </div>
 
               <table id="ignored-table" class="table table-striped">
@@ -567,8 +572,10 @@ export async function renderProject(id) {
     if (file) {
       file.text()
         .then(content => importIgnoredFromFile(id, content))
-        .then(() => {
-          toast(`Imported hidden phrases from ${file.name}.`, "success");
+        .then(({ read, added }) => {
+          const dup = read - added;
+          toast(`${file.name}: ${added.toLocaleString()} entries added to the hide list` +
+            (dup ? ` (${dup.toLocaleString()} already there).` : "."), "success");
           ignoredTable.ajax.reload();
           phrasesTable.ajax.reload(null, false);
         })
@@ -712,7 +719,13 @@ export async function renderProject(id) {
       fetchIgnoredPhrases(params).then(result => callback(result));
     },
     columns: [
-        { data: null, render: (data, type, row) => `${escapeHtml(row.src_phrase)} - ${escapeHtml(row.tgt_phrase)}` },
+        { data: null, render: (data, type, row) => {
+            const any = '<span class="text-muted fst-italic" title="any translation">any</span>';
+            const src = row.src_phrase ? escapeHtml(row.src_phrase) : any;
+            const tgt = row.tgt_phrase ? escapeHtml(row.tgt_phrase) : any;
+            const tag = row.imported == 1 ? '' : ' <span class="badge text-bg-light" title="hidden from the phrase table">pair</span>';
+            return `${src} ↔ ${tgt}${tag}`;
+          } },
         { data: null, render: (data, type, row) => `<button class="btn btn-sm btn-outline undo-ignore-phrase-btn" data-id="${row.id}" data-imported="${row.imported}"><i class="fas fa-undo"></i></button>` }
     ]
   });
