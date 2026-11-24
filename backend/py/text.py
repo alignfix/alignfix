@@ -1,3 +1,4 @@
+import html
 import unicodedata
 import ftfy
 import re
@@ -128,15 +129,20 @@ def tokenise(text, as_string=False):
     return tokens
 
 
-def highlight_tokens(tok_str, tok_to_highlight, replace_with_str):
-
+def highlight_tokens(tok_str, tok_to_highlight, replace_with_str, css_class="src-occurrence"):
+    """
+    Return the tokens of tok_str as HTML-escaped strings, with every occurrence
+    of tok_to_highlight replaced by a highlight span around replace_with_str
+    (also escaped). The result is meant to be passed to detokenise().
+    """
     raw_tok = tok_str.split()
-    #src_raw = src_raw.replace(f"{search_value_1}", src_highlight)
-    indices = find_all_sublists(raw_tok, tok_to_highlight)
+    escaped = [html.escape(t) for t in raw_tok]
 
-    for start in indices:
-        if raw_tok[start:start + len(tok_to_highlight)] == tok_to_highlight:
-            raw_tok[start:start + len(tok_to_highlight)] = [f"<span class='occurrence src-occurrence'>{replace_with_str}</span>"]
-            tok_str = raw_tok
+    if tok_to_highlight:
+        # indices are sorted descending, so replacing does not shift later matches
+        for start in find_all_sublists(raw_tok, tok_to_highlight):
+            escaped[start:start + len(tok_to_highlight)] = [
+                f"<span class='occurrence {css_class}'>{html.escape(str(replace_with_str))}</span>"
+            ]
 
-    return tok_str
+    return escaped

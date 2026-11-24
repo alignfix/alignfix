@@ -15,7 +15,7 @@
  */
 
 import { importScoresFromFile, assignAutoScores, assignStabilityScores, assignConsistencyScores, explainConsistency, getScores, getAlignmentsWithScores } from "../backend/js/scores.js";
-import { bindAsyncButton } from "./utils.js";
+import { bindAsyncButton, escapeHtml } from "./utils.js";
 
 /**
  * renderScores(projectId)
@@ -639,13 +639,13 @@ export async function renderScores(projectId) {
           <tr>
             <td>${row.id}</td>
             <td><span class="badge bg-${scoreClass}">${row.score ? row.score.toFixed(3) : 'N/A'}</span></td>
-            <td class="text-truncate" style="max-width: 300px;" title="${row.src_text_detok || ''}">${row.src_text_detok || ''}</td>
-            <td class="text-truncate" style="max-width: 300px;" title="${row.tgt_text_detok || ''}">${row.tgt_text_detok || ''}</td>
+            <td class="text-truncate" style="max-width: 300px;" title="${escapeHtml(row.src_text_detok)}">${escapeHtml(row.src_text_detok)}</td>
+            <td class="text-truncate" style="max-width: 300px;" title="${escapeHtml(row.tgt_text_detok)}">${escapeHtml(row.tgt_text_detok)}</td>
             <td>
               <button class="btn btn-sm btn-outline-primary view-alignment-btn" 
                       data-id="${row.id}"
-                      data-src="${(row.src_text || '').replace(/"/g, '&quot;')}"
-                      data-tgt="${(row.tgt_text || '').replace(/"/g, '&quot;')}"
+                      data-src="${escapeHtml(row.src_text)}"
+                      data-tgt="${escapeHtml(row.tgt_text)}"
                       data-align="${row.alignment || ''}"
                       data-score="${row.score || 0}">
                 <i class="fas fa-eye me-1"></i>View
@@ -695,7 +695,7 @@ export async function renderScores(projectId) {
       if (token == "#NB") { token = "_"; }
       html += `<th class="text-center align-middle" style="min-width: 50px; max-width: 80px; padding: 8px 4px;">
                 <div style="font-weight: bold;">${idx}</div>
-                <div style="font-size: 0.9em; word-break: break-word;">${token}</div>
+                <div style="font-size: 0.9em; word-break: break-word;">${escapeHtml(token)}</div>
               </th>`;
     });
     html += '</tr></thead><tbody>';
@@ -705,7 +705,7 @@ export async function renderScores(projectId) {
       if (srcToken == "#NB") { srcToken = "_"; }
       html += `<tr><th style="position: sticky; left: 0; background: white; z-index: 5; min-width: 50px; max-width: 120px; padding: 8px;">
                  <div style="font-weight: bold;">${srcIdx}</div>
-                 <div style="font-size: 0.9em; word-break: break-word;">${srcToken}</div>
+                 <div style="font-size: 0.9em; word-break: break-word;">${escapeHtml(srcToken)}</div>
                </th>`;
       tgtTokens.forEach((tgtToken, tgtIdx) => {
         const isAligned = alignPairs.some(p => p.src === srcIdx && p.tgt === tgtIdx);
@@ -726,12 +726,8 @@ export async function renderScores(projectId) {
 
       if (token == "#NB") { return '_'; }  // Skip rendering for #NB tokens
 
-      return `<span class="word-token ${type}-word" data-idx="${idx}" style="cursor: pointer; padding: 2px 4px; margin: 2px; border-radius: 3px; transition: background-color 0.2s;">${token}</span>`;
+      return `<span class="word-token ${type}-word" data-idx="${idx}" style="cursor: pointer; padding: 2px 4px; margin: 2px; border-radius: 3px; transition: background-color 0.2s;">${escapeHtml(token)}</span>`;
     }).join(' ');
-  }
-
-  function escapeHtml(text) {
-    return String(text).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
 
   // Show tokens flagged by the last consistency run and underline them in the texts
@@ -783,7 +779,7 @@ export async function renderScores(projectId) {
     document.getElementById('modal-alignment-viz').innerHTML = `
       <div class="mb-3">
         <label class="form-label fw-bold small">Raw Alignment String:</label>
-        <pre class="bg-light p-2 border rounded" style="font-size: 0.85em; overflow-x: auto;"><code>${alignmentDisplay}</code></pre>
+        <pre class="bg-light p-2 border rounded" style="font-size: 0.85em; overflow-x: auto;"><code>${escapeHtml(alignmentDisplay)}</code></pre>
       </div>
       ${visualizeAlignment(srcText, tgtText, alignment)}
     `;

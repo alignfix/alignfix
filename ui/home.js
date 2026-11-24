@@ -21,7 +21,7 @@ import { tokeniseLines, getLinesFromFiles } from "../backend/js/text.js";
 import { importBinaryProject, updateProjectStats } from "../backend/js/projects.js";
 import { getLinesStats } from "../backend/js/stats.js";
 import { deleteProject } from "../backend/js/projects.js";
-import { bindAsyncButton, nextFrame } from "./utils.js";
+import { bindAsyncButton, nextFrame, escapeHtml } from "./utils.js";
 import { profiler } from "./profiler.js";
 
 // Improve responsiveness: make touchstart/touchmove listeners passive by default
@@ -130,8 +130,8 @@ async function loadProjects() {
               </div>
             </div>
             <div style="min-width: 0;">
-              <div class="text-truncate" style="max-width: 200px;" title="${project[1] || project[0]}">
-                ${project[1] || project[0]}
+              <div class="text-truncate" style="max-width: 200px;" title="${escapeHtml(project[1] || project[0])}">
+                ${escapeHtml(project[1] || project[0])}
               </div>
               <small class="text-muted">ID: ${project[0]}</small>
             </div>
@@ -298,7 +298,7 @@ async function loadDocuments() {
             <div class="d-flex align-items-center mb-2">
               <i class="fas fa-file-alt text-primary me-2"></i>
               <strong>Source</strong>
-              <span class="ms-2 text-muted small">${sourceFileEl.files[0].name}</span>
+              <span class="ms-2 text-muted small">${escapeHtml(sourceFileEl.files[0].name)}</span>
             </div>
             <div class="bg-light p-2 rounded mb-2">
               <div class="d-flex justify-content-between small">
@@ -318,7 +318,7 @@ ${srcStats.sample.join('\n--\n')}</div>
             <div class="d-flex align-items-center mb-2">
               <i class="fas fa-file-alt text-success me-2"></i>
               <strong>Target</strong>
-              <span class="ms-2 text-muted small">${targetFileEl.files[0].name}</span>
+              <span class="ms-2 text-muted small">${escapeHtml(targetFileEl.files[0].name)}</span>
             </div>
             <div class="bg-light p-2 rounded mb-2">
               <div class="d-flex justify-content-between small">

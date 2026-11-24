@@ -17,13 +17,7 @@
 import { getProject } from "../backend/js/projects.js";
 import { countFixes } from "../backend/js/fixes.js";
 import { downloadBinaryProject } from "../backend/js/projects.js";
-import { bindAsyncButton } from "./utils.js";
-
-// helper HTML escapes
-const escapeHtml = (s) => {
-  if (s === undefined || s === null) return '';
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-};
+import { bindAsyncButton, escapeHtml } from "./utils.js";
 
 /**
  * renderStats(projectId)

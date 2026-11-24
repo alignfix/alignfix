@@ -14,6 +14,12 @@
  * limitations under the License.
  */
 
+/** Escape text for use in HTML content and attribute values. */
+export function escapeHtml(value) {
+  if (value === undefined || value === null) return '';
+  return String(value).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
 export function bindAsyncButton(btn, handler, text="Processing...") {
   btn.addEventListener("click", async (e) => {
     const oldHtml = btn.innerHTML;

@@ -15,6 +15,7 @@
  */
 
 import { getFixes } from "../backend/js/fixes.js";
+import { escapeHtml } from "./utils.js";
 
 /**
  * renderHistory(projectId)
@@ -101,9 +102,9 @@ export async function renderHistory(projectId) {
           <div class="d-flex w-100 justify-content-between">
             <h6 class="mb-1">
               <span class="text-muted">${actionLabel}</span>
-              <code class="bg-warning text-black px-2 py-1 rounded">${fix1}</code> 
+              <code class="bg-warning text-black px-2 py-1 rounded">${escapeHtml(fix1)}</code> 
               ↔
-              <code class="bg-warning text-black px-2 py-1 rounded">${fix2}</code>
+              <code class="bg-warning text-black px-2 py-1 rounded">${escapeHtml(fix2)}</code>
             </h6>
             <div class="text-end">
                <span class="badge bg-secondary mt-1">${entry.percentage || 100}%</span>
@@ -117,9 +118,9 @@ export async function renderHistory(projectId) {
           <div class="d-flex w-100 justify-content-between">
             <h6 class="mb-1">
               <span class="text-muted">${actionLabel}</span>
-              <code class="bg-warning text-black px-2 py-1 rounded">${fix1}</code> 
+              <code class="bg-warning text-black px-2 py-1 rounded">${escapeHtml(fix1)}</code> 
               ↔
-              <code class="bg-warning text-black px-2 py-1 rounded">${fix2}</code>
+              <code class="bg-warning text-black px-2 py-1 rounded">${escapeHtml(fix2)}</code>
             </h6>
             <div class="text-end">
                <span class="badge bg-secondary mt-1">${entry.percentage || 100}%</span>
@@ -141,9 +142,9 @@ export async function renderHistory(projectId) {
         </div>
         <div class="d-flex w-100 justify-content-between">
           <h6 class="mb-1"><span class="text-muted">${fixType === 'delete' ? 'Deleted phrases:' : 'Original:'}</span>
-          <code class="bg-light px-2 py-1 rounded">${entry.src_phrase}</code> 
+          <code class="bg-light px-2 py-1 rounded">${escapeHtml(entry.src_phrase)}</code> 
           ↔ 
-          <code class="bg-light px-2 py-1 rounded">${entry.tgt_phrase}</code>     
+          <code class="bg-light px-2 py-1 rounded">${escapeHtml(entry.tgt_phrase)}</code>     
           </h6>
           <div class="text-end">
             <span class="badge ${fixType === 'delete' ? 'bg-danger' : 'bg-primary'} mt-1">

@@ -19,7 +19,7 @@ import { fetchTranslations, storeTranslation, deleteTranslation, deleteTranslati
 import { applyFixes } from "../backend/js/fixes.js";
 import { getProject, saveProject, downloadProject, mergeProjectStats } from "../backend/js/projects.js";
 import { recomputeAlignments } from "../backend/js/aligner.js";
-import { bindAsyncButton } from "./utils.js";
+import { bindAsyncButton, escapeHtml } from "./utils.js";
 import { profiler } from "./profiler.js";
 
 let fixes = [];  // global list of fixes
@@ -61,12 +61,12 @@ function showModal(title, message, type = 'info', buttons = []) {
             <div class="modal-header">
               <h5 class="modal-title d-flex align-items-center gap-2">
                 ${icon}
-                <span>${title}</span>
+                <span>${escapeHtml(title)}</span>
               </h5>
               <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body">
-              <p style="white-space: pre-wrap;">${message}</p>
+              <p style="white-space: pre-wrap;">${escapeHtml(message)}</p>
             </div>
             <div class="modal-footer">
               ${buttonHtml}
@@ -149,7 +149,7 @@ export async function renderProject(id) {
     <!-- Title + Input -->
     <h1 class="mb-2 mb-md-0 d-flex align-items-center flex-grow-1">
       <a href="#home"></a>
-      <input type="text" class="form-control" id="document_name" placeholder="Document Name" value="${project.name}" >
+      <input type="text" class="form-control" id="document_name" placeholder="Document Name" value="${escapeHtml(project.name)}" >
     </h1>
 
     <!-- Buttons -->
@@ -703,8 +703,8 @@ export async function renderProject(id) {
     },
     columns: [
         { data: null, render: (data, type, row) => `<button class="btn btn-sm btn-outline show-phrases-btn" data-src="${escapeForHtmlAttr(row.src_phrase)}" data-tgt="${escapeForHtmlAttr(row.tgt_phrase)}" data-direction="${row.direction}"><i class="fas fa-search"></i> ${row.num_occurrences}</button>
-        <button class="btn btn-sm btn-clear show-src-phrase-btn" data-text="${escapeForHtmlAttr(row.src_phrase)}">${row.src_phrase}</button>${getDirectionSymbol(row.direction)}<button class="btn btn-sm btn-clear search-tgt-phrase-btn" data-text="${escapeForHtmlAttr(row.tgt_phrase)}">${row.tgt_phrase}</button>` },
-        { data: null, render: (data, type, row) => `<button class="btn btn-sm btn-outline ignore-phrase-btn" data-id="${row.id}" data-src="${row.src_phrase}" data-tgt="${row.tgt_phrase}"><i class="fas fa-eye-slash"></i></button>` }
+        <button class="btn btn-sm btn-clear show-src-phrase-btn" data-text="${escapeForHtmlAttr(row.src_phrase)}">${escapeHtml(row.src_phrase)}</button>${getDirectionSymbol(row.direction)}<button class="btn btn-sm btn-clear search-tgt-phrase-btn" data-text="${escapeForHtmlAttr(row.tgt_phrase)}">${escapeHtml(row.tgt_phrase)}</button>` },
+        { data: null, render: (data, type, row) => `<button class="btn btn-sm btn-outline ignore-phrase-btn" data-id="${row.id}" data-src="${escapeHtml(row.src_phrase)}" data-tgt="${escapeHtml(row.tgt_phrase)}"><i class="fas fa-eye-slash"></i></button>` }
     ]
   });
   // Attach handlers every time the table draws
@@ -760,7 +760,7 @@ export async function renderProject(id) {
       fetchIgnoredPhrases(params).then(result => callback(result));
     },
     columns: [
-        { data: null, render: (data, type, row) => `${row.src_phrase} - ${row.tgt_phrase}` },
+        { data: null, render: (data, type, row) => `${escapeHtml(row.src_phrase)} - ${escapeHtml(row.tgt_phrase)}` },
         { data: null, render: (data, type, row) => `<button class="btn btn-sm btn-outline undo-ignore-phrase-btn" data-id="${row.id}" data-imported="${row.imported}"><i class="fas fa-undo"></i></button>` }
     ]
   });
@@ -887,15 +887,15 @@ function updateFixesList() {
         <div class="d-flex justify-content-between align-items-start">
           <div class="flex-grow-1">
             <div class="text-muted mb-1">
-              <span class="fw-bold">${fix.src_phrase}</span> 
+              <span class="fw-bold">${escapeHtml(fix.src_phrase)}</span> 
               <span class="mx-1">${directionSymbol}</span> 
-              <span class="fw-bold">${fix.tgt_phrase}</span>
+              <span class="fw-bold">${escapeHtml(fix.tgt_phrase)}</span>
             </div>
             <div class="text-success">
-              ${fix1_text ? `<span>${fix1_text}</span>` : ''}
+              ${fix1_text ? `<span>${escapeHtml(fix1_text)}</span>` : ''}
               <span class="mx-1">${directionSymbol}</span> 
-              ${fix2_text ? `<span>${fix2_text}</span>` : ''}
-              <span class="badge bg-info">${fix.type}</span>
+              ${fix2_text ? `<span>${escapeHtml(fix2_text)}</span>` : ''}
+              <span class="badge bg-info">${escapeHtml(fix.type)}</span>
             </div>
           </div>
           <div class="text-end ms-2">

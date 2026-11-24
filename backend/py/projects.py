@@ -500,7 +500,7 @@ def fetch_translations(project_id, phrase1, phrase2, fix1, fix2, direction, star
             src_raw = highlight_tokens(src_raw, phrase1_tok, rep1)
 
             tgt_raw = doc["line2"]
-            tgt_raw = highlight_tokens(tgt_raw, phrase2_tok, rep2)
+            tgt_raw = highlight_tokens(tgt_raw, phrase2_tok, rep2, css_class="tgt-occurrence")
 
             src = detokenise(src_raw)
             tgt = detokenise(tgt_raw)
@@ -527,14 +527,17 @@ def fetch_translations(project_id, phrase1, phrase2, fix1, fix2, direction, star
             src_text = doc['line1']
             tgt_text = doc['line2']
 
-            src_text_tok = src_text.split()
-            tgt_text_tok = tgt_text.split()
+            src_raw_tok = src_text.split()
+            tgt_raw_tok = tgt_text.split()
+            # Escaped copies for display; matching below uses the raw tokens
+            src_text_tok = [html.escape(x) for x in src_raw_tok]
+            tgt_text_tok = [html.escape(x) for x in tgt_raw_tok]
 
             text1_text2_alignment = parse_alignment(doc['alignment'])
 
             phrases = get_directed_phrases_from_texts_and_alignment(
-                src_text_tok,
-                tgt_text_tok,
+                src_raw_tok,
+                tgt_raw_tok,
                 text1_text2_alignment,
                 min_phrase_len=min_phrase_len,
                 max_phrase_len=max_phrase_len,
@@ -549,27 +552,18 @@ def fetch_translations(project_id, phrase1, phrase2, fix1, fix2, direction, star
                 src_end = src_start + phrase1_num_tok
                 tgt_end = tgt_start + phrase2_num_tok
 
-                if src_text_tok[src_start:src_end] == phrase1_tok:
+                if src_raw_tok[src_start:src_end] == phrase1_tok:
                     rep1 = fix1 if fix1 else phrase1
                     span = soup.new_tag("span", **{"class": "occurrence src-occurrence"})
                     span.string = rep1  # this will be properly escaped
-                    src_text_tok = (
-                        [html.escape(x) for x in src_text_tok[:src_start]]
-                        + [span]
-                        + [html.escape(x) for x in src_text_tok[src_end:]]
-                    )
+                    src_text_tok = src_text_tok[:src_start] + [span] + src_text_tok[src_end:]
 
-                if tgt_text_tok[tgt_start:tgt_end] == phrase2_tok:
+                if tgt_raw_tok[tgt_start:tgt_end] == phrase2_tok:
 
                     rep2 = fix2 if fix2 else phrase2
                     span = soup.new_tag("span", **{"class": "occurrence tgt-occurrence"})
                     span.string = rep2  # this will be properly escaped
-
-                    tgt_text_tok = (
-                        [html.escape(x) for x in tgt_text_tok[:tgt_start]]
-                        + [span]
-                        + [html.escape(x) for x in tgt_text_tok[tgt_end:]]
-                    )
+                    tgt_text_tok = tgt_text_tok[:tgt_start] + [span] + tgt_text_tok[tgt_end:]
 
                 src_text = detokenise(src_text_tok)
                 tgt_text = detokenise(tgt_text_tok)
