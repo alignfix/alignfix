@@ -25,6 +25,9 @@ import { downloadBlob, safeFilename } from "../backend/js/utils.js";
  * - If projectId provided: renders a polished stats page for that project.
  * - If no projectId: shows a compact projects list with quick stats and link to each project's stats page.
  */
+const fmtCount = (n) => (Number.isFinite(Number(n)) && n !== null && n !== "" ? Number(n).toLocaleString() : "–");
+const fmtSeconds = (n) => (Number.isFinite(Number(n)) && n !== null && n !== "" ? `${Number(n).toFixed(2)} s` : "–");
+
 export async function renderStats(projectId) {
   const app = document.getElementById('app') || document.body;
   app.innerHTML = `<div class="container py-3"><div class="text-center">Loading...</div></div>`;
@@ -69,9 +72,9 @@ export async function renderStats(projectId) {
         </div>
         <div class="d-flex flex-wrap gap-2">
           <button id="download-binary" class="btn btn-primary" title="Export the whole project as an .algf file (can be imported again)">
-            <i class="fas fa-file-archive me-2"></i>Download Project</button>
+            <i class="fas fa-file-archive me-2"></i>Download project</button>
           <button id="download-stats" class="btn btn-outline-secondary">
-            <i class="fas fa-chart-line me-2"></i>Download Statistics</button>
+            <i class="fas fa-chart-line me-2"></i>Download statistics</button>
         </div>
       </div>
 
@@ -79,16 +82,14 @@ export async function renderStats(projectId) {
         <div class="col-12">
           <div class="card shadow-sm mb-3">
             <div class="card-body">
-              <h5 class="card-title d-flex justify-content-between align-items-center">
-                <span>Performance Profiler</span>
-              </h5>
+              <h5 class="card-title"><i class="fas fa-gauge-high me-2"></i>Performance of the last run</h5>
               <div id="stats-profiler" class="profiler-wrapper">
                 <div class="table-responsive">
                   <table class="table table-hover table-sm">
-                    <thead class="table-dark">
+                    <thead>
                       <tr>
                         <th>Function</th>
-                        <th class="text-end">CPU Time (ms)</th>
+                        <th class="text-end">Time (ms)</th>
                         <th class="text-end">Mem Δ (MB)</th>
                         <th class="text-end">Heap (MB)</th>
                       </tr>
@@ -106,92 +107,23 @@ export async function renderStats(projectId) {
             </div>
           </div>
 
-          <div class="card shadow-sm">
-            <div class="card-body">
-              <h5 class="card-title">
-                <i class="fas fa-chart-bar"></i> Processing Statistics
-              </h5>
-              <div class="row g-3">
-                <div class="col-md-6">
-                  <div class="bg-light p-3 rounded">
-                    <div class="d-flex justify-content-between align-items-center">
-                      <div>
-                        <div class="small text-muted">Phrases Extracted</div>
-                        <div class="h5 mb-0">${escapeHtml(String(projectStats.total_phrases_extracted ?? 0))}</div>
-                      </div>
-                      <div class="text-success">
-                        <i class="fas fa-extract fa-2x"></i>
-                      </div>
-                    </div>
-                  </div>
+          <h2 class="section-title mt-4 mb-3">Processing</h2>
+          <div class="row g-3">
+            ${[
+              ["Phrases extracted", fmtCount(projectStats.total_phrases_extracted), "before filtering"],
+              ["Phrase pairs shown", fmtCount(projectStats.total_phrases_filtered), "after length, count and score filters"],
+              ["Hidden phrases", fmtCount(projectStats.total_ignored_phrases), "by you or the hide list"],
+              ["Edits applied", fmtCount(num_fixes), "see History"],
+              ["Deleting old phrases", fmtSeconds(projectStats.db_delete_duration_seconds), "last extraction"],
+              ["Saving phrases", fmtSeconds(projectStats.db_insert_duration_seconds), "last extraction"],
+            ].map(([label, value, note]) => `
+              <div class="col-6 col-xl-4">
+                <div class="stat-card">
+                  <div class="stat-label">${label}</div>
+                  <div class="stat-value">${escapeHtml(value)}</div>
+                  <div class="stat-note">${note}</div>
                 </div>
-                <div class="col-md-6">
-                  <div class="bg-light p-3 rounded">
-                    <div class="d-flex justify-content-between align-items-center">
-                      <div>
-                        <div class="small text-muted">Phrases Filtered</div>
-                        <div class="h5 mb-0">${escapeHtml(String(projectStats.total_phrases_filtered ?? 0))}</div>
-                      </div>
-                      <div class="text-warning">
-                        <i class="fas fa-filter fa-2x"></i>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                <div class="col-md-6">
-                  <div class="bg-light p-3 rounded">
-                    <div class="d-flex justify-content-between align-items-center">
-                      <div>
-                        <div class="small text-muted">Phrases Ignored</div>
-                        <div class="h5 mb-0">${escapeHtml(String(projectStats.total_ignored_phrases ?? 0))}</div>
-                      </div>
-                      <div class="text-secondary">
-                        <i class="fas fa-eye-slash fa-2x"></i>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                <div class="col-md-6">
-                  <div class="bg-light p-3 rounded">
-                    <div class="d-flex justify-content-between align-items-center">
-                      <div>
-                        <div class="small text-muted">Number of Fixes</div>
-                        <div class="h5 mb-0">${escapeHtml(String(num_fixes))}</div>
-                      </div>
-                      <div class="text-success">
-                        <i class="fas fa-tools fa-2x"></i>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                <div class="col-md-6">
-                  <div class="bg-light p-3 rounded">
-                    <div class="d-flex justify-content-between align-items-center">
-                      <div>
-                        <div class="small text-muted">DB Delete Phrases Duration (s)</div>
-                        <div class="h5 mb-0">${escapeHtml(String(projectStats.db_delete_duration_seconds.toFixed(2) ?? 0))}</div>
-                      </div>
-                      <div class="text-secondary">
-                        <i class="fas fa-trash fa-2x"></i>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                <div class="col-md-6">
-                  <div class="bg-light p-3 rounded">
-                    <div class="d-flex justify-content-between align-items-center">
-                      <div>
-                        <div class="small text-muted">DB Insert Phrases Duration (s)</div>
-                        <div class="h5 mb-0">${escapeHtml(String(projectStats.db_insert_duration_seconds.toFixed(2) ?? 0))}</div>
-                      </div>
-                      <div class="text-success">
-                        <i class="fas fa-plus fa-2x"></i>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
+              </div>`).join("")}
           </div>
         </div>
       </div>
