@@ -547,7 +547,10 @@ def apply_duplication_fixes(project_id, fixes):
     skipped_fixes = 0
     total_duplications = 0
 
-    num_rows = cursor.execute("SELECT COUNT(*) FROM alignments WHERE project_id=?", (project_id,)).fetchone()[0]
+    # Next free row id. MAX (not COUNT) so ids stay unique even with gaps, and
+    # incremented once per inserted row so ids never repeat across fixes.
+    max_row_id = cursor.execute("SELECT MAX(row_id) FROM alignments WHERE project_id=?", (project_id,)).fetchone()[0]
+    next_row_id = 0 if max_row_id is None else max_row_id + 1
 
     for fix_i, fix_obj in enumerate(fixes):
         fix_progress = int((fix_i / total_fixes) * 20)  # 0-20% progress
@@ -651,7 +654,8 @@ def apply_duplication_fixes(project_id, fixes):
                         break
                 new_line2 = ' '.join(text2_tokens)
 
-            new_row_id = num_rows + doc_idx + fix_i
+            new_row_id = next_row_id
+            next_row_id += 1
             # Insert new row
             cursor.execute("""
                 INSERT OR IGNORE INTO alignments (row_id, project_id, line1, line2, alignment, score)
