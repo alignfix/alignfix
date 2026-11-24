@@ -120,7 +120,11 @@ async function extractDirectedPhrases(module, src_lines, tgt_lines, align_lines,
     try {
         const ignore_content = module.FS.readFile("ignore-phrases", { encoding: 'utf8' });
         const ignore_lines = ignore_content.split('\n').filter(line => line.trim() !== '');
-        ignore_set = new Set(ignore_lines);
+        // same key format as getOccurrencesFromFile
+        ignore_set = new Set(ignore_lines.map(line => {
+          const [phrase1, phrase2] = line.split('|||').map(part => trimPhrase(part.trim()));
+          return `${phrase1}|||${phrase2}`;
+        }));
         console.log(`🚫 Loaded ${ignore_set.size.toLocaleString()} additional phrases to ignore from extraction`);
     } catch (err) {
         console.log('ℹ️ No additional ignore phrases found during extraction');
@@ -218,7 +222,9 @@ async function extractPhrasesBatch(module, src_lines, tgt_lines, align_lines, sc
     const duration = (endTime - startTime) / 1000;
     console.log(`✅ extractPhrasesBatch completed in ${duration.toFixed(2)}s: ${occurrences.size.toLocaleString()} phrases`);
 
-    return occurrences;
+    // Pairs seen in sentences scoring above the threshold (not extracted there)
+    const aboveThreshold = new Set([...ignore_src_tgt, ...ignore_tgt_src]);
+    return [occurrences, aboveThreshold];
 }
 
 // BATCH SIZE rules based on max_phrase_length:
@@ -243,6 +249,9 @@ async function _extractPhrases(module, pyodide, src_lines, tgt_lines, align_line
     // Use Maps for efficient accumulation
 
     const occurrences = new Map();
+    // Pairs occurring in any sentence above the score threshold are not collected,
+    // even if they also occur in sentences below it (see the threshold tooltip).
+    const aboveThreshold = new Set();
     const chunk_processing_times = [];
     const startTime = performance.now();
     // Get configuration parameters
@@ -278,7 +287,7 @@ async function _extractPhrases(module, pyodide, src_lines, tgt_lines, align_line
         // Slice on-the-fly, no precomputed chunk arrays
         try {
             console.log(`🔄 Calling extractPhrasesBatch for lines ${start}-${end}`);
-            const occurrences_batch = await extractPhrasesBatch(
+            const [occurrences_batch, aboveThresholdBatch] = await extractPhrasesBatch(
                 module,
                 src_lines.slice(start, end),
                 tgt_lines.slice(start, end),
@@ -294,7 +303,13 @@ async function _extractPhrases(module, pyodide, src_lines, tgt_lines, align_line
             // 🔄 Merge occurrences_batch into occurrences
             let newCount = 0;
             let mergedCount = 0;
+            for (const key of aboveThresholdBatch) {
+              aboveThreshold.add(key);
+              occurrences.delete(key);
+            }
+
             for (const [key, value] of occurrences_batch.entries()) {
+              if (aboveThreshold.has(key)) continue;
               const row_ids = Array.from(value.rows, id => id + start);
 
               if (occurrences.has(key)) {
