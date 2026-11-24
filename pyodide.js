@@ -70,6 +70,7 @@ export async function initPyodide() {
         await loadPythonModule('backend/py/alignment.py', 'alignment');
         await loadPythonModule('backend/py/phrases.py', 'phrases');
         await loadPythonModule('backend/py/scores.py', 'scores');
+        await loadPythonModule('backend/py/lexicon.py', 'lexicon');
         await loadPythonModule('backend/py/text.py', 'text');
         await loadPythonModule('backend/py/fixes.py', 'fixes');
         await loadPythonModule('backend/py/utils.py', 'utils');

@@ -4,7 +4,9 @@ import json
 
 from db import get_db
 from projects import get_alignment_row_ids
-from collections import Counter
+from statistics import median
+
+from lexicon import Lexicon, normalize, is_content
 
 
 def write_scores(project_id, scores, row_ids=None):
@@ -38,79 +40,73 @@ def import_scores_from_file(project_id, scores):
     return False
 
 
+def get_active_rows(project_id):
+    """(row_id, line1, line2, alignment) of the active alignments, ordered by row_id."""
+    _, cursor = get_db()
+    cursor.execute("""
+        SELECT row_id, line1, line2, alignment
+        FROM alignments
+        WHERE project_id = ? AND deleted_at IS NULL
+        ORDER BY row_id
+    """, (project_id,))
+    return cursor.fetchall()
+
+
+def rank_normalize(values):
+    """Map values to [0, 1] by rank (ties share their mean rank); robust to outliers."""
+    n = len(values)
+    if n == 0:
+        return []
+    if n == 1:
+        return [0.5]
+    order = sorted(range(n), key=lambda i: values[i])
+    ranks = [0.0] * n
+    i = 0
+    while i < n:
+        j = i
+        while j + 1 < n and values[order[j + 1]] == values[order[i]]:
+            j += 1
+        mean_rank = (i + j) / 2
+        for k in range(i, j + 1):
+            ranks[order[k]] = mean_rank / (n - 1)
+        i = j + 1
+    return ranks
+
+
 def assign_auto_scores(project_id):
+    """
+    Translation clarity: how predictable the translations of a sentence's words
+    are, from the entropy H(O(w)) of each word's outcome distribution (aligned
+    partners plus being left unaligned), estimated from the word alignments.
+    Weighting by frequency means a word with one dominant translation and a few
+    noisy variants still counts as clear. Sentence difficulty is the mean entropy
+    over its content tokens on both sides; scores are rank-normalized and
+    inverted, so 1 = clearest and 0 = most ambiguous.
+    """
     try:
-        conn, cursor = get_db()
-        
-        # get all src and tgt lines for the given project
-        cursor.execute("""
-            SELECT row_id, line1, line2
-            FROM alignments
-            WHERE project_id = ? AND deleted_at IS NULL
-            ORDER BY row_id
-        """, (project_id,))
+        rows = get_active_rows(project_id)
+        lex = Lexicon.build((line1, line2, align) for _, line1, line2, align in rows)
 
-        alignments = cursor.fetchall()
+        known = list(lex.src.entropy.values()) + list(lex.tgt.entropy.values())
+        # Words too rare for reliable statistics get the median entropy.
+        default = median(known) if known else 0.0
 
-        # get all phrases of length 1 for the given project
-        cursor.execute("""
-            SELECT src_phrase, tgt_phrase, num_occurrences
-            FROM phrases
-            WHERE project_id = ?
-                AND src_phrase NOT LIKE '% %'
-                AND tgt_phrase NOT LIKE '% %'
-        """, (project_id,))
-
-        phrases = cursor.fetchall()
-
-        print(f"Calculating automatic scores for {len(alignments)} alignments using {len(phrases)} single-word phrases.")
+        print(f"Calculating translation clarity for {len(rows)} alignments "
+              f"({len(lex.src.entropy)} source / {len(lex.tgt.entropy)} target words with statistics).")
 
         raw_scores = []
-        # build maps of phrase -> number of entries (faster lookups)
-        src_phrase_counts = Counter()
-        tgt_phrase_counts = Counter()
-        for src_phrase, tgt_phrase, _ in phrases:
-            src_phrase_counts[src_phrase] += 1
-            tgt_phrase_counts[tgt_phrase] += 1
+        for _, line1, line2, _ in rows:
+            entropies = [lex.src.entropy.get(normalize(t), default) for t in line1.split() if is_content(t)]
+            entropies += [lex.tgt.entropy.get(normalize(t), default) for t in line2.split() if is_content(t)]
+            raw_scores.append(sum(entropies) / len(entropies) if entropies else default)
 
-        for row_id, src_line, tgt_line in alignments:
-            src_words = set(src_line.split())
-            tgt_words = set(tgt_line.split())
-
-            # lookup counts per unique word (O(1) per word)
-            src_counts = [src_phrase_counts.get(w, 5) for w in src_words]
-            tgt_counts = [tgt_phrase_counts.get(w, 5) for w in tgt_words]
-
-            src_score = sum(src_counts) / len(src_counts) if src_counts else 1
-            tgt_score = sum(tgt_counts) / len(tgt_counts) if tgt_counts else 1
-
-            raw_score = (src_score + tgt_score) / 2
-            raw_scores.append(raw_score)
-
-        # Normalize scores to 0-1 range
-        # Invert so 1 = clear (low ambiguity), 0 = ambiguous (high ambiguity)
-        # This matches the Alignment Stability Index where higher is better
-        if raw_scores:
-            min_score = min(raw_scores)
-            max_score = max(raw_scores)
-            score_range = max_score - min_score
-            
-            if score_range > 0:
-                # Normalize and invert: 1 - normalized score
-                scores = [round(1 - ((score - min_score) / score_range), 5) for score in raw_scores]
-            else:
-                # All scores are the same
-                scores = [0.5] * len(raw_scores)
-        else:
-            scores = []
-
-        write_scores(project_id, scores, row_ids=[row[0] for row in alignments])
+        scores = [round(1 - r, 5) for r in rank_normalize(raw_scores)]
+        write_scores(project_id, scores, row_ids=[row[0] for row in rows])
 
         return True
 
     except sqlite3.Error as e:
         print("Error occurred while assigning automatic scores:", e)
-        pass
 
     return False
 

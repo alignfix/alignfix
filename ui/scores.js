@@ -237,20 +237,23 @@ export async function renderScores(projectId) {
                   
                   <h6>How it works:</h6>
                   <ol>
-                    <li><strong>Word-Level Ambiguity:</strong> For each word, the system counts how many different translations appear in the corpus.</li>
-                    <li><strong>Sentence Difficulty:</strong> The difficulty is the average ambiguity across all words in the sentence.</li>
-                    <li><strong>Normalization & Inversion:</strong> Raw difficulty scores are normalized to 0-1 and inverted so higher scores mean easier translations.</li>
+                    <li><strong>Translation statistics:</strong> From the word alignments, the system learns for each word how often it is left unaligned and how often it is aligned to each of its translations (words seen fewer than 20 times are skipped).</li>
+                    <li><strong>Word-level ambiguity:</strong> The ambiguity of a word is the entropy of this distribution. A word with one dominant translation and a few rare variants is still clear; a word whose translations are evenly split is ambiguous.</li>
+                    <li><strong>Sentence difficulty:</strong> The mean ambiguity over the words of both sides (words without statistics get the corpus median).</li>
+                    <li><strong>Normalization &amp; inversion:</strong> Sentences are ranked by difficulty and mapped to 0-1, so higher scores mean clearer translations.</li>
                   </ol>
-                  
+
                   <h6>Formula:</h6>
                   <div class="bg-light p-3 rounded mb-2">
-                    <code>D(S) = (1 / |W(S)|) × Σ A(w) for w in W(S)</code>
+                    <code>H(w) = −p₀ log p₀ − Σₜ r·p(t|w) log(r·p(t|w))</code><br>
+                    <code>D(S) = (1 / |W(S)|) × Σ H(w) for w in W(S)</code>
                   </div>
                   <p class="small">
-                    Where <code>D(S)</code> is raw difficulty, <code>W(S)</code> is the set of words, and <code>A(w)</code> is the ambiguity (number of translations) of word <code>w</code>.
-                    The final score is normalized and inverted: <code>1 - (D - D_min) / (D_max - D_min)</code>
+                    Where <code>r</code> is how often <code>w</code> is aligned at all, <code>p₀ = 1 − r</code>, <code>p(t|w)</code> is the share of its links that go to <code>t</code>,
+                    and <code>W(S)</code> are the words of both sides of sentence pair <code>S</code>.
+                    The final score is <code>1 − rank(D) / (N − 1)</code> over the <code>N</code> sentence pairs.
                   </p>
-                  
+
                   <h6>Score Range:</h6>
                   <div class="d-flex align-items-center gap-3 mt-2">
                     <span class="badge bg-danger">0.0 - Very Ambiguous</span>
@@ -355,9 +358,9 @@ export async function renderScores(projectId) {
         focus on <strong>higher-quality data</strong> and reduce the number of phrases to review.
       </p>
       <p>
-        Clicking <strong>"Assign Auto Scores"</strong> automatically estimates how 
-        <strong>difficult a sentence is to translate</strong>, based on the <em>average ambiguity</em> 
-        of its words.
+        <strong>"Translation Difficulty"</strong> estimates how
+        <strong>difficult a sentence is to translate</strong>, based on the <em>average ambiguity</em>
+        (entropy of the aligned translations) of its words.
       </p>
     </div>
     `;
