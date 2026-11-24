@@ -33,7 +33,13 @@ export function bindAsyncButton(btn, handler, text = "Processing...") {
     const width = btn.offsetWidth;
     btn.disabled = true;
     btn.setAttribute("aria-busy", "true");
-    btn.innerHTML = `<span class="spinner-border spinner-border-sm" aria-hidden="true"></span>${text ? ` ${escapeHtml(text)}` : ""}`;
+    const icon = btn.dataset.busy === "icon" && btn.querySelector("i");
+    if (icon) {
+      // rich buttons (title and description) keep their text: only the icon spins
+      icon.outerHTML = `<span class="spinner-border spinner-border-sm busy-spinner" aria-hidden="true"></span>`;
+    } else {
+      btn.innerHTML = `<span class="spinner-border spinner-border-sm" aria-hidden="true"></span>${text ? ` ${escapeHtml(text)}` : ""}`;
+    }
     if (!text && width) btn.style.minWidth = `${width}px`;  // keep the size of icon buttons
     try {
       // let the button repaint before the handler starts working

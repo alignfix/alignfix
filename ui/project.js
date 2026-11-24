@@ -67,7 +67,7 @@ export async function renderProject(id, params = new URLSearchParams()) {
   <div class="page-header project-header">
     <div class="input-group project-name-group">
       <label class="input-group-text" for="document_name" title="Project name"><i class="fas fa-pen"></i></label>
-      <input type="text" class="form-control form-control-lg" id="document_name" placeholder="Project name"
+      <input type="text" class="form-control" id="document_name" placeholder="Project name"
              value="${escapeHtml(project.name)}" maxlength="200" aria-label="Project name">
       <button id="store-btn" class="btn btn-outline-primary" type="button" title="Save the project name">
         <i class="fas fa-save"></i> Save
@@ -95,18 +95,18 @@ export async function renderProject(id, params = new URLSearchParams()) {
       </table>
       <div class="mt-2">
         <button id="download-phrases-btn" class="btn btn-sm btn-secondary">
-          <i class="fas fa-download"></i> Download Phrases
+          <i class="fas fa-download"></i> Download phrases
         </button>
       </div>
       <!-- Fixes Preview -->
       <div class="card mt-3 shadow-sm">
-        <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
+        <div class="card-header d-flex justify-content-between align-items-center">
           <h6 class="card-title mb-0">
-            <i class="fas fa-tools me-2"></i>Pending Edits
+            <i class="fas fa-list-check me-2"></i>Pending edits
+            <span class="badge rounded-pill text-bg-secondary ms-1" id="fixes-count">0</span>
           </h6>
           <div class="d-flex align-items-center gap-2">
-            <span class="badge bg-light text-dark" id="fixes-count">0</span>
-            <button class="btn btn-sm btn-outline-light" type="button" data-bs-toggle="collapse" 
+            <button class="btn btn-sm btn-secondary" type="button" data-bs-toggle="collapse" 
                     data-bs-target="#fixes-upload-section" aria-expanded="false" 
                     aria-controls="fixes-upload-section" title="Import fixes">
               <i class="fas fa-upload"></i>
@@ -141,7 +141,7 @@ export async function renderProject(id, params = new URLSearchParams()) {
           <h2 class="accordion-header" id="headingTwo">
             <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#collapseTwo"
               aria-expanded="false" aria-controls="collapseTwo">
-              Hidden phrases
+              <i class="fas fa-eye-slash me-2 text-muted"></i>Hidden phrases
             </button>
           </h2>
           <div id="collapseTwo" class="accordion-collapse collapse" aria-labelledby="headingTwo"
@@ -150,7 +150,7 @@ export async function renderProject(id, params = new URLSearchParams()) {
 
               <div class="mb-3">
                 <label for="ignored-file-input" class="form-label">Import a hide list</label>
-                <input class="form-control" type="file" id="ignored-file-input" name="file" accept=".txt,.tsv,.json,text/plain,application/json">
+                <input class="form-control form-control-sm" type="file" id="ignored-file-input" name="file" accept=".txt,.tsv,.json,text/plain,application/json">
                 <div class="form-text">
                   A word list (<code>.txt</code>, one word or phrase per line) hides those source phrases
                   whatever their translation; <code>src&lt;TAB&gt;tgt</code> lines hide pairs. JSON exported
@@ -158,7 +158,7 @@ export async function renderProject(id, params = new URLSearchParams()) {
                 </div>
               </div>
 
-              <table id="ignored-table" class="table table-striped">
+              <table id="ignored-table" class="table table-sm">
                 <thead>
                   <tr>
                     <th>phrase</th>
@@ -170,9 +170,10 @@ export async function renderProject(id, params = new URLSearchParams()) {
                 </tbody>
               </table>
               <!-- create button to download ignore -->
-              <button id="download-ignored-btn" class="btn btn-secondary">Download</button>
-              <!-- create button to delete all ignored phrases -->
-              <button id="delete-ignored-btn" class="btn btn-danger ms-2">Delete All</button>
+              <div class="d-flex gap-2">
+                <button id="download-ignored-btn" class="btn btn-sm btn-secondary"><i class="fas fa-download"></i> Download</button>
+                <button id="delete-ignored-btn" class="btn btn-sm btn-outline-danger ms-auto"><i class="fas fa-trash-can"></i> Remove all</button>
+              </div>
             </div>
           </div>
         </div>
@@ -193,130 +194,88 @@ export async function renderProject(id, params = new URLSearchParams()) {
 
   const sidebar = document.getElementById("sidebar-content");
   sidebar.innerHTML = `
-    <div class="col-12">
-      <form id="fix-form" class="row g-3 align-items-end">
-        <div class="mb-2">
-          <div class="form-floating">
-            <input type="text" id="fix-test1" class="form-control" placeholder="Phrase 1">
-            <label for="fix-test1">Phrase 1</label>
-          </div>
-        </div>
-        <div class="mb-4">
-          <div class="form-floating">
-            <input type="text" id="fix-fix1" class="form-control" placeholder="Fix 1">
-            <label for="fix-fix1">Fix 1</label>
-          </div>
-        </div>
-        <div class="mb-2">
-          <div class="form-floating">
-            <input type="text" id="fix-test2" class="form-control" placeholder="Phrase 2">
-            <label for="fix-test2">Phrase 2</label>
-          </div>
-        </div>
-        <div class="mb-2">
-          <div class="form-floating">
-            <input type="text" id="fix-fix2" class="form-control" placeholder="Fix 2">
-            <label for="fix-fix2">Fix 2</label>
-          </div>
-        </div>
-        <div class="mb-2">
-          <label for="fix-percentage" class="form-label">Percentage of words to fix 
-            <span id="fix-percentage-value" class="badge bg-secondary ms-2">100%</span>
-          </label>
-          <input type="range" class="form-range" id="fix-percentage" min="0" max="100" value="100">
-        </div>
-        <input type="hidden" id="fix-direction" value="0">
-        <div class="d-grid gap-2 mb-2">
-          <div class="row g-2 mb-2">
-            <div class="col-6">
-              <button class="btn btn-success w-100" type="button" id="augment-btn">
-                <i class="fas fa-clone"></i> Augment
-              </button>
-            </div>
-            <div class="col-6">
-              <button class="btn btn-primary w-100" type="button" id="add-fix-btn">
-                <i class="fas fa-plus"></i> Add Fix
-              </button>
-            </div>
-          </div>
-          <div class="row g-2 mb-2">
-            <div class="col-6">
-              <button class="btn btn-outline w-100 mb-2" type="button" id="clear-search-btn">
-                Clear Search
-              </button>
-            </div>
-            <div class="col-6">
-              <button class="btn btn-secondary w-100" type="button" id="search-phrases-btn">
-                <i class="fas fa-search"></i> Search
-              </button>
-            </div>
-          </div>
-          <div class="row g-2 mb-2">
-            <div class="col-12">
-              <button class="btn btn-outline-danger w-100" type="button" id="delete-sentences-btn">
-                <i class="fas fa-trash"></i> Delete Matching Sentences
-              </button>
-            </div>
-          </div>
-        </div>
-      </form>
-    </div>
-    <hr/>
-    <div class="col-12 mt-2">
-      <form id="set-metadata-form">
-        <div class="mb-2">
-          <label for="threshold-input" class="form-label">
-            Score Threshold
-            <i class="fas fa-info-circle ms-1 text-muted" 
-               data-bs-toggle="tooltip" 
-               data-bs-placement="right"
-               title="Only phrase pairs that occur exclusively in sentences scoring below the threshold are collected."></i>
-          </label>
-          <input type="number" class="form-control" id="threshold-input" min="0" max="10000" placeholder="threshold" value="${project.threshold}">
-        </div>
-        <div class="row mb-2">
-          <div class="col-12">
-            <label class="form-label">Min./Max. phrase length</label>
-          </div>
-          <div class="col-6">
-            <input type="number" class="form-control" id="min-phrase-length-input" min="1" max="10" value="${project.min_phrase_len}">
-          </div>
-          <div class="col-6">
-            <input type="number" class="form-control" id="max-phrase-length-input" min="1" max="10" value="${project.max_phrase_len}">
-          </div>
-        </div>
-        <div class="row mb-2">
-          <div class="col-12">
-            <label class="form-label">Min./Max. occurrences</label>
-          </div>
-          <div class="col-6">
-            <input type="number" class="form-control" id="min-occurrences-input" min="1" max="100" value="${project.min_count}">
-          </div>
-          <div class="col-6">
-            <input type="number" class="form-control" id="max-occurrences-input" min="1" value="${project.max_count}">
-          </div>
-        </div>
-        <div class="row mb-4">
-          <div class="col-12">
-            <label class="form-label">Num. cores / Max. Phrases</label>
-          </div>
-          <div class="col-6">
-            <input type="number" class="form-control" id="num-cores-input" min="1" max="16" value="${numCores}">
-          </div>
-          <div class="col-6">
-            <input type="number" class="form-control" id="max-phrases-input" max="40000000" value="${project.max_phrases}">
-          </div>
-        </div>
-        <div class="d-grid gap-2 mb-2">
-          <button class="btn btn-primary" type="button" id="threshold-btn-soft">
-            <i class="fas fa-refresh"></i> Extract phrases
+    <form id="fix-form" class="sidebar-section" autocomplete="off">
+      <h2 class="panel-label">Find &amp; fix</h2>
+      <div class="fix-grid">
+        <span></span>
+        <span class="fix-grid-head">Phrase</span>
+        <span class="fix-grid-head">Replace with</span>
+        <label class="fix-grid-side" for="fix-test1" title="Source side">Src</label>
+        <input type="text" id="fix-test1" class="form-control form-control-sm" placeholder="source" aria-label="Source phrase">
+        <input type="text" id="fix-fix1" class="form-control form-control-sm" placeholder="unchanged" aria-label="Source replacement">
+        <label class="fix-grid-side" for="fix-test2" title="Target side">Tgt</label>
+        <input type="text" id="fix-test2" class="form-control form-control-sm" placeholder="target" aria-label="Target phrase">
+        <input type="text" id="fix-fix2" class="form-control form-control-sm" placeholder="unchanged" aria-label="Target replacement">
+      </div>
+
+      <div class="d-flex gap-2 mt-3">
+        <button class="btn btn-sm btn-secondary flex-grow-1" type="button" id="search-phrases-btn">
+          <i class="fas fa-search"></i> Search
+        </button>
+        <button class="btn btn-sm btn-link text-muted" type="button" id="clear-search-btn">Clear</button>
+      </div>
+
+      <div class="mt-3">
+        <label for="fix-percentage" class="form-label d-flex justify-content-between mb-1">
+          <span>Share of matches to edit</span>
+          <span id="fix-percentage-value" class="text-muted fw-normal tabular">100%</span>
+        </label>
+        <input type="range" class="form-range" id="fix-percentage" min="0" max="100" value="100">
+      </div>
+      <input type="hidden" id="fix-direction" value="0">
+
+      <div class="d-grid gap-2 mt-2">
+        <div class="d-flex gap-2">
+          <button class="btn btn-sm btn-primary flex-grow-1" type="button" id="add-fix-btn"
+                  title="Replace the phrases in the matching sentences">
+            <i class="fas fa-pen"></i> Add fix
           </button>
-          <button class="btn btn-warning" type="button" id="threshold-btn-hard">
-            <i class="fas fa-arrows-left-right"></i> Realign sentences
+          <button class="btn btn-sm btn-secondary flex-grow-1" type="button" id="augment-btn"
+                  title="Add edited copies of the matching sentences, keeping the originals">
+            <i class="fas fa-clone"></i> Augment
           </button>
         </div>
-      </form>
-    </div>
+        <button class="btn btn-sm btn-link link-danger text-start px-0" type="button" id="delete-sentences-btn">
+          <i class="fas fa-trash-can"></i> Delete matching sentences…
+        </button>
+      </div>
+    </form>
+
+    <form id="set-metadata-form" class="sidebar-section">
+      <h2 class="panel-label">Phrase extraction</h2>
+      <div class="mb-2">
+        <label for="threshold-input" class="form-label">
+          Score threshold
+          <i class="fas fa-circle-info ms-1 text-muted"
+             data-bs-toggle="tooltip"
+             data-bs-placement="right"
+             title="Only phrase pairs that occur exclusively in sentences scoring below the threshold are collected."></i>
+        </label>
+        <input type="number" class="form-control form-control-sm" id="threshold-input" min="0" max="10000" placeholder="threshold" value="${project.threshold}">
+      </div>
+      <div class="settings-grid">
+        <span class="form-label">Phrase length</span>
+        <input type="number" class="form-control form-control-sm" id="min-phrase-length-input" min="1" max="10" value="${project.min_phrase_len}" aria-label="Minimum phrase length" title="minimum">
+        <input type="number" class="form-control form-control-sm" id="max-phrase-length-input" min="1" max="10" value="${project.max_phrase_len}" aria-label="Maximum phrase length" title="maximum">
+        <span class="form-label">Occurrences</span>
+        <input type="number" class="form-control form-control-sm" id="min-occurrences-input" min="1" max="100" value="${project.min_count}" aria-label="Minimum occurrences" title="minimum">
+        <input type="number" class="form-control form-control-sm" id="max-occurrences-input" min="1" value="${project.max_count}" aria-label="Maximum occurrences" title="maximum">
+        <label class="form-label" for="max-phrases-input">Max. phrases</label>
+        <input type="number" class="form-control form-control-sm span-2" id="max-phrases-input" max="40000000" value="${project.max_phrases}">
+        <label class="form-label" for="num-cores-input">CPU cores</label>
+        <input type="number" class="form-control form-control-sm" id="num-cores-input" min="1" max="16" value="${numCores}">
+      </div>
+      <div class="form-text mb-3">Length and occurrences: minimum and maximum.</div>
+      <div class="d-grid gap-2">
+        <button class="btn btn-sm btn-primary" type="button" id="threshold-btn-soft">
+          <i class="fas fa-rotate"></i> Extract phrases
+        </button>
+        <button class="btn btn-sm btn-secondary" type="button" id="threshold-btn-hard"
+                title="Align all sentences again, then extract the phrases">
+          <i class="fas fa-arrows-left-right"></i> Realign sentences
+        </button>
+      </div>
+    </form>
     `;
 
   const extractAndStoreStats = async () => {
@@ -866,7 +825,9 @@ function updateFixesList() {
   const container = $('#fixes-container');
   const fixesCount = $('#fixes-count');
   
-  fixesCount.text(fixes.length);
+  fixesCount.text(fixes.length)
+    .toggleClass('text-bg-warning', fixes.length > 0)
+    .toggleClass('text-bg-secondary', fixes.length === 0);
   
   if (fixes.length === 0) {
     container.html(`

@@ -48,43 +48,34 @@ export async function renderScores(projectId) {
         <!-- File Upload Section -->
         <div class="col-12 col-lg-4 mb-4">
           <div class="card h-100">
-            <div class="card-header">
+            <div class="card-header d-flex justify-content-between align-items-center">
               <h5 class="card-title mb-0">
-                <i class="fas fa-upload me-2"></i>
-                Score Management
+                <i class="fas fa-calculator me-2"></i>Assign scores
               </h5>
+              <button id="refresh-scores-btn" class="btn btn-sm btn-link text-muted p-0" title="Reload the scores">
+                <i class="fas fa-rotate"></i><span class="visually-hidden">Refresh</span>
+              </button>
             </div>
             <div class="card-body">
-              <div class="mb-3">
-                <label for="scores-file-input" class="form-label">Upload Scores File</label>
-                <input class="form-control" type="file" id="scores-file-input" name="file" accept=".txt,.csv">
-                <div class="form-text">Upload a text file with one score per line</div>
-              </div>
-              
-              <div class="mb-3">
-                <label class="form-label">Auto-Assign Scores</label>
-                <div class="d-grid gap-2">
-                  <button id="assign-difficulty-scores-btn" class="btn btn-secondary">
-                    <i class="fas fa-brain me-2"></i>
-                    Translation Difficulty
-                  </button>
-                  <button id="assign-stability-scores-btn" class="btn btn-secondary">
-                    <i class="fas fa-link me-2"></i>
-                    Alignment Stability
-                  </button>
-                  <button id="assign-consistency-scores-btn" class="btn btn-secondary">
-                    <i class="fas fa-search me-2"></i>
-                    Alignment Consistency
-                  </button>
-                </div>
-              </div>
-              
-              <div class="d-grid">
-                <button id="refresh-scores-btn" class="btn btn-outline-primary">
-                  <i class="fas fa-sync-alt me-2"></i>
-                  Refresh Data
+              <div class="panel-label">Compute from the alignments</div>
+              <div class="list-group score-methods mb-4">
+                <button id="assign-difficulty-scores-btn" class="list-group-item list-group-item-action" data-busy="icon">
+                  <i class="fas fa-brain"></i>
+                  <span><strong>Translation clarity</strong><small>How ambiguous the words of a sentence are</small></span>
+                </button>
+                <button id="assign-stability-scores-btn" class="list-group-item list-group-item-action" data-busy="icon">
+                  <i class="fas fa-link"></i>
+                  <span><strong>Alignment stability</strong><small>How completely both sides are aligned</small></span>
+                </button>
+                <button id="assign-consistency-scores-btn" class="list-group-item list-group-item-action" data-busy="icon">
+                  <i class="fas fa-magnifying-glass"></i>
+                  <span><strong>Alignment consistency</strong><small>Words that behave unlike elsewhere in the corpus</small></span>
                 </button>
               </div>
+
+              <div class="panel-label">Or upload your own</div>
+              <input class="form-control form-control-sm" type="file" id="scores-file-input" name="file" accept=".txt,.csv" aria-label="Scores file">
+              <div class="form-text">A text file with one score per line, in sentence order.</div>
             </div>
           </div>
         </div>
@@ -94,8 +85,7 @@ export async function renderScores(projectId) {
           <div class="card h-100">
             <div class="card-header">
               <h5 class="card-title mb-0">
-                <i class="fas fa-chart-histogram me-2"></i>
-                Score Histogram
+                <i class="fas fa-chart-column me-2"></i>Score distribution
               </h5>
             </div>
             <div class="card-body">
@@ -107,42 +97,37 @@ export async function renderScores(projectId) {
         </div>
 
         <!-- Alignments Viewer - Always Visible -->
-        <div class="col-12 my-4">
+        <div class="col-12 mb-4">
           <div class="card">
             <div class="card-header">
-              <h5 class="mb-0">
-                <i class="fas fa-align-left me-2"></i>
-                Alignments with Scores
+              <h5 class="card-title mb-0">
+                <i class="fas fa-list me-2"></i>Sentence pairs by score
               </h5>
             </div>
             <div class="card-body">
-              <!-- Filters and Controls -->
-              <div class="row mb-3">
-                <div class="col-md-4">
-                  <label class="form-label">Min Score</label>
-                  <input type="number" id="min-score-filter" class="form-control" step="0.1" placeholder="Min">
+              <div class="row g-2 align-items-end mb-3">
+                <div class="col-6 col-md-2">
+                  <label class="form-label" for="min-score-filter">Min. score</label>
+                  <input type="number" id="min-score-filter" class="form-control form-control-sm" step="0.1" placeholder="any">
                 </div>
-                <div class="col-md-4">
-                  <label class="form-label">Max Score</label>
-                  <input type="number" id="max-score-filter" class="form-control" step="0.1" placeholder="Max">
+                <div class="col-6 col-md-2">
+                  <label class="form-label" for="max-score-filter">Max. score</label>
+                  <input type="number" id="max-score-filter" class="form-control form-control-sm" step="0.1" placeholder="any">
                 </div>
-                <div class="col-md-4">
-                  <label class="form-label">Sort By</label>
-                  <select id="sort-order" class="form-select">
-                    <option value="desc">Score (High to Low)</option>
-                    <option value="asc">Score (Low to High)</option>
-                    <option value="id">ID (Ascending)</option>
+                <div class="col-12 col-md-3">
+                  <label class="form-label" for="sort-order">Sort by</label>
+                  <select id="sort-order" class="form-select form-select-sm">
+                    <option value="desc">Score, high to low</option>
+                    <option value="asc">Score, low to high</option>
+                    <option value="id">Line number</option>
                   </select>
                 </div>
-              </div>
-
-              <div class="row mb-3">
-                <div class="col-12">
-                  <button id="apply-filters-btn" class="btn btn-primary">
-                    <i class="fas fa-filter me-2"></i>Apply Filters
+                <div class="col-12 col-md-auto d-flex gap-2">
+                  <button id="apply-filters-btn" class="btn btn-sm btn-primary">
+                    <i class="fas fa-filter"></i> Apply
                   </button>
-                  <button id="reset-filters-btn" class="btn btn-secondary">
-                    <i class="fas fa-undo me-2"></i>Reset
+                  <button id="reset-filters-btn" class="btn btn-sm btn-secondary">
+                    <i class="fas fa-rotate-left"></i> Reset
                   </button>
                 </div>
               </div>
@@ -170,15 +155,15 @@ export async function renderScores(projectId) {
               </div>
 
               <!-- Pagination Controls -->
-              <div class="d-flex justify-content-between align-items-center mt-3">
+              <div class="d-flex flex-wrap gap-2 justify-content-between align-items-center mt-3 small">
                 <div>
-                  <span class="text-muted">Page: </span>
-                  <span id="current-page">1</span> / <span id="total-pages">1</span>
-                  <span class="ms-3 text-muted">Total: </span>
-                  <span id="total-records">0</span> alignments
+                  <span class="text-muted">Page</span>
+                  <span id="current-page">1</span> <span class="text-muted">of</span> <span id="total-pages">1</span>
+                  <span class="ms-3 text-muted">·</span>
+                  <span id="total-records" class="ms-2">0</span> <span class="text-muted">sentence pairs</span>
                 </div>
-                <div>
-                  <label class="me-2">Per page:</label>
+                <div class="small">
+                  <label class="me-2 text-muted" for="page-size">Per page</label>
                   <select id="page-size" class="form-select form-select-sm d-inline-block" style="width: auto;">
                     <option value="30" selected>30</option>
                     <option value="50">50</option>
@@ -204,17 +189,14 @@ export async function renderScores(projectId) {
               </div>
             </div>
           </div>
-          </div>
         </div>
-
 
         <!-- Score Metrics Explanations -->
         <div class="col-12">
           <div class="card">
             <div class="card-header">
-              <h5 class="mb-0">
-                <i class="fas fa-info-circle me-2"></i>
-                Score Metrics Explained
+              <h5 class="card-title mb-0">
+                <i class="fas fa-circle-info me-2"></i>How the scores are computed
               </h5>
             </div>
             <div class="card-body">
@@ -261,7 +243,7 @@ export async function renderScores(projectId) {
                   </p>
 
                   <h6>Score Range:</h6>
-                  <div class="d-flex align-items-center gap-3 mt-2">
+                  <div class="d-flex flex-wrap align-items-center gap-2 mt-2">
                     <span class="badge bg-danger">0.0 - Very Ambiguous</span>
                     <span class="badge bg-warning">0.3 - Difficult</span>
                     <span class="badge bg-info">0.6 - Moderate</span>
@@ -288,7 +270,7 @@ export async function renderScores(projectId) {
                   </div>
 
                   <h6>Score Range:</h6>
-                  <div class="d-flex align-items-center gap-3 mt-2">
+                  <div class="d-flex flex-wrap align-items-center gap-2 mt-2">
                     <span class="badge bg-danger">0.0 - Bad</span>
                     <span class="badge bg-warning">0.3 - Fair</span>
                     <span class="badge bg-info">0.6 - Good</span>
@@ -324,7 +306,7 @@ export async function renderScores(projectId) {
                   </p>
 
                   <h6>Score Range:</h6>
-                  <div class="d-flex align-items-center gap-3 mt-2">
+                  <div class="d-flex flex-wrap align-items-center gap-2 mt-2">
                     <span class="badge bg-danger">&lt; 0.2 - Very unexpected</span>
                     <span class="badge bg-warning">0.2 - 0.5 - Suspicious</span>
                     <span class="badge bg-success">1.0 - Consistent</span>
@@ -552,7 +534,8 @@ export async function renderScores(projectId) {
       await plotScoresHistogram();
       await loadAlignments();
       console.log("Scores data refreshed");
-    }
+    },
+    ""
   );
 
   // Initial load
