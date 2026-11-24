@@ -45,3 +45,29 @@ export function wasmOutput(name, onLine = null) {
     printErr: (text) => (log.warn || console.warn)(`[${name}] ${text}`),
   };
 }
+
+/** Save a Blob as a file. The object URL is released once the download started. */
+export function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // revoking right away cancels the download in some browsers
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
+/** A file name from free text: no path separators, ':' etc. (invalid on Windows). */
+export function safeFilename(text, fallback = "alignfix") {
+  const name = String(text || "")
+    .normalize("NFC")
+    .replace(/[\\/:*?"<>|\u0000-\u001f]+/g, "_")
+    .replace(/\s+/g, "_")
+    .replace(/_{2,}/g, "_")
+    .replace(/^[._]+|[._]+$/g, "")
+    .slice(0, 100);
+  return name || fallback;
+}

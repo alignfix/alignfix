@@ -68,6 +68,8 @@ def get_project(id):
     conn, cursor = get_db()
     cursor.execute("SELECT id, name, min_phrase_len, max_phrase_len, file_offset, min_count, max_count, threshold, max_phrases, stats, created_at FROM projects WHERE id=?", (id,))
     project = cursor.fetchone()
+    if project is None:
+        return None
 
     stats = json.loads(project[9]) if project[9] else {}
 

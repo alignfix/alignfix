@@ -19,7 +19,8 @@ import { profiler } from '../../ui/profiler.js';
 import { stage, report, yieldToUI } from "../../ui/activity.js";
 import { getLinesStats } from "./stats.js"; 
 import { safeSyncfs } from "./storage.js";
-import { wasmOutput } from "./utils.js";
+import { wasmOutput, downloadBlob } from "./utils.js";
+
 
 const SAVE_BATCH_SIZE = 20000; // phrases per database call (progress is reported in between)
 
@@ -693,18 +694,6 @@ export async function downloadIgnoredPhrases(project_id) {
   downloadBlob(blob, `hidden_phrases_project_${project_id}.json`);
 }
 
-/** Save a Blob as a file (the object URL is released afterwards). */
-export function downloadBlob(blob, filename) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 10000);
-}
-
 export async function downloadPhrases(project_id) {
   
   const pyodide = await initPyodide();
@@ -729,13 +718,6 @@ export async function downloadPhrases(project_id) {
   const jsonStr = JSON.stringify(transformedData, null, 2);
   const blob = new Blob([jsonStr], { type: 'application/json' });
 
-  // create a link to download the JSON file
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `phrases_project_${project_id}.json`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
+  downloadBlob(blob, `phrases_project_${project_id}.json`);
 
 }

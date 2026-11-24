@@ -17,7 +17,7 @@
 /* Word-level consistency review and phrase table export (backend/py/review.py). */
 
 import { initPyodide } from "../../pyodide.js";
-import { downloadBlob } from "./phrases.js";
+import { downloadBlob } from "./utils.js";
 
 /**
  * One page of the word table, with summary and chart data.

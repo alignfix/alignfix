@@ -90,11 +90,21 @@ export async function router() {
   const params = new URLSearchParams(query);
   const page = path.split("-")[0];
   const projectId = path.split("-")[1];
-  if (page !== "#home" && page !== "#about" && projectPages.includes(page.slice(1)) && !/^\d+$/.test(projectId || "")) {
-    setActiveNav(null);
-    app.innerHTML = `<div class="empty-state"><i class="fas fa-map-signs"></i><h5>No such project</h5>
-      <p><a href="#home">Go to your projects</a>.</p></div>`;
-    return;
+  if (projectPages.includes(page.slice(1))) {
+    let exists = /^\d+$/.test(projectId || "");
+    if (exists) {
+      try {
+        exists = Boolean(await getProject(projectId));
+      } catch (err) {
+        console.error("Could not load the project:", err);
+      }
+    }
+    if (!exists) {
+      setActiveNav(null);
+      app.innerHTML = `<div class="empty-state"><i class="fas fa-map-signs"></i><h5>No such project</h5>
+        <p>It may have been deleted. <a href="#home">Go to your projects</a>.</p></div>`;
+      return;
+    }
   }
   // while an operation runs the title shows its progress
   if (!isBusy()) document.title = "AlignFix";

@@ -16,12 +16,14 @@
 
 import { initPyodide } from "../../pyodide.js";
 import { safeSyncfs } from "./storage.js";
+import { downloadBlob, safeFilename } from "./utils.js";
 
+/** The project with this id, or null if there is none. */
 export async function getProject(id) {
 
   const pyodide = await initPyodide();
 
-  pyodide.globals.set("id", id);
+  pyodide.globals.set("id", parseInt(id));
 
   const response = await pyodide.runPythonAsync(`
       import json
@@ -140,14 +142,9 @@ export async function downloadProject(project_id) {
   zip.file("fixes.json", blob3);
   const zipBlob = await zip.generateAsync({ type: "blob" });
 
-  // create a link to download the zip file
-  const url = URL.createObjectURL(zipBlob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `${dataObj.project.name}_${dataObj.project.created_at}.zip`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
+  // e.g. "corpus_de-en_2026-11-24.zip" (':' of the time is not allowed in file names)
+  const date = String(dataObj.project.created_at || "").slice(0, 10);
+  downloadBlob(zipBlob, `${safeFilename(dataObj.project.name, `project_${project_id}`)}${date ? "_" + date : ""}.zip`);
 }
 
 export async function downloadBinaryProject(project_id) {
@@ -163,18 +160,11 @@ export async function downloadBinaryProject(project_id) {
   `);
 
   const uint8Array = binaryData.toJs();
+  binaryData.destroy?.();
 
-  // create a blob for the binary data
   const blob = new Blob([uint8Array], { type: 'application/octet-stream' });
-
-  // create a link to download the binary file
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `project_${project_id}.algf`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
+  const project = await getProject(project_id).catch(() => null);
+  downloadBlob(blob, `${safeFilename(project?.name, `project_${project_id}`)}.algf`);
 }
 
 export async function importBinaryProject(file) {

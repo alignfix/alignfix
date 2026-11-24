@@ -18,6 +18,7 @@ import { getProject } from "../backend/js/projects.js";
 import { countFixes } from "../backend/js/fixes.js";
 import { downloadBinaryProject } from "../backend/js/projects.js";
 import { bindAsyncButton, escapeHtml, parseDbDate } from "./utils.js";
+import { downloadBlob, safeFilename } from "../backend/js/utils.js";
 
 /**
  * renderStats(projectId)
@@ -330,14 +331,7 @@ export async function renderStats(projectId) {
   document.getElementById('download-stats').addEventListener('click', () => {
     const dataStr = JSON.stringify({ id: projectId, name: name, stats: projectStats, created_at: created }, null, 2);
     const blob = new Blob([dataStr], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `project-${projectId}-stats.json`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    downloadBlob(blob, `${safeFilename(name, 'project_' + projectId)}_stats.json`);
   });
 
   // Add event listeners for new action buttons
@@ -372,14 +366,7 @@ export async function renderStats(projectId) {
       
       const dataStr = JSON.stringify(detailedStats, null, 2);
       const blob = new Blob([dataStr], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `project-${projectId}-detailed-stats.json`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, `${safeFilename(name, 'project_' + projectId)}_detailed-stats.json`);
     });
   }
 
