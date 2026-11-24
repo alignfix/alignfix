@@ -14,62 +14,32 @@
  * limitations under the License.
  */
 
-// Safe wrapper around pyodide.FS.syncfs with retries and fallback toggle
+/**
+ * Write the in-memory database to the browser's persistent storage
+ * (IndexedDB), retrying a few times with a growing delay. Rejects if all
+ * attempts fail.
+ *
+ * Only ever syncs in this direction: syncfs(true) would load the stored
+ * (older) state over the in-memory database and lose the latest changes.
+ */
 export async function safeSyncfs(pyodide, maxAttempts = 4) {
-    return new Promise((resolve, reject) => {
-        let attempts = 0;
-        let triedToggle = false;
-
-        const trySync = (syncToPersistent = false) => {
-            try {
-                pyodide.FS.syncfs(syncToPersistent, (err) => {
-                    if (!err) {
-                        resolve();
-                        return;
-                    }
-
-                    const errMsg = err && err.message ? err.message : String(err);
-                    console.warn(`FS.syncfs attempt ${attempts + 1} failed:`, errMsg);
-
-                    // Retry with exponential backoff
-                    if (attempts < maxAttempts - 1) {
-                        attempts++;
-                        const delay = Math.pow(2, attempts) * 100;
-                        setTimeout(() => trySync(syncToPersistent), delay);
-                        return;
-                    }
-
-                    // If we exhausted attempts, try toggling the sync direction once
-                    if (!triedToggle) {
-                        triedToggle = true;
-                        attempts = 0;
-                        console.warn('FS.syncfs toggling sync direction and retrying');
-                        // toggle direction: try true (syncToPersistent) if we previously used false, and vice versa
-                        trySync(!syncToPersistent);
-                        return;
-                    }
-
-                    // Give up
-                    reject(err);
-                });
-            } catch (ex) {
-                // catch synchronous exceptions from FS.syncfs
-                const syncErrMsg = ex && ex.message ? ex.message : String(ex);
-                console.error('FS.syncfs threw:', syncErrMsg);
-                if (attempts < maxAttempts - 1) {
-                    attempts++;
-                    const delay = Math.pow(2, attempts) * 100;
-                    setTimeout(() => trySync(syncToPersistent), delay);
-                } else if (!triedToggle) {
-                    triedToggle = true;
-                    attempts = 0;
-                    trySync(!syncToPersistent);
-                } else {
-                    reject(ex);
-                }
+    let lastError = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            await new Promise((resolve, reject) => {
+                pyodide.FS.syncfs(false, (err) => err ? reject(err) : resolve());
+            });
+            if (attempt > 1) console.log(`Saved to browser storage on attempt ${attempt}`);
+            return;
+        } catch (err) {
+            lastError = err;
+            console.warn(`Saving to browser storage failed (attempt ${attempt} of ${maxAttempts}):`, err?.message || String(err));
+            if (attempt < maxAttempts) {
+                await new Promise(resolve => setTimeout(resolve, 200 * 2 ** attempt));
             }
-        };
-
-        trySync(false);
-    });
+        }
+    }
+    const reason = lastError?.message || String(lastError);
+    throw new Error(`Could not save to the browser storage (${reason}). The changes are kept until the page is closed; ` +
+        `free up disk space or allow storage for this site, then try again.`);
 }
