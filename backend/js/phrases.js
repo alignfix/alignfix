@@ -46,51 +46,14 @@ function getOccurrencesFromFile(content, direction) {
       if (!occurrences[key]) {
         occurrences[key] = { 
           direction: direction, 
-          rows: []
+          rows: new Set()   // a pair occurring twice in one sentence counts once
         };
       }
-      occurrences[key].rows.push(parseInt(row_id));
+      occurrences[key].rows.add(parseInt(row_id));
     }
 
     return occurrences;
 
-}
-
-function separateCommonIds(src2tgt, tgt2src) {
-  const common = {};
-
-  if (!src2tgt || !tgt2src) {
-    return common;
-  }
-
-  for (const key of Object.keys(src2tgt)) {
-    if (key in tgt2src) {
-      const srcObj = src2tgt[key];
-      const tgtObj = tgt2src[key];
-
-      const srcIds = srcObj.rows;
-      const tgtIds = tgtObj.rows;
-
-      // Find intersection
-      const commonIds = srcIds.filter(id => tgtIds.includes(id));
-
-      if (commonIds.length > 0) {
-        common[key] = { rows: commonIds };
-
-        // Remove common IDs from originals
-        srcObj.rows = srcIds.filter(id => !commonIds.includes(id));
-        tgtObj.rows = tgtIds.filter(id => !commonIds.includes(id));
-
-        // Optional: update counts after filtering
-        srcObj.count = srcObj.rows.length;
-        tgtObj.count = tgtObj.rows.length;
-      } else {
-        common[key] = { rows: [] };
-      }
-    }
-  }
-
-  return common;
 }
 
 async function extractDirectedPhrases(module, src_lines, tgt_lines, align_lines, score_lines, direction, min_phrase_length, max_phrase_length, threshold, numCores, ignore_pairs) {
@@ -218,61 +181,36 @@ async function extractPhrasesBatch(module, src_lines, tgt_lines, align_lines, sc
 
     console.log(`📊 Extracted ${Object.keys(occurrences_src_tgt || {}).length} src→tgt and ${Object.keys(occurrences_tgt_src || {}).length} tgt→src phrases`);
 
-    // Convert to Map if needed
-    const map_src_tgt = occurrences_src_tgt instanceof Map
-        ? occurrences_src_tgt
-        : new Map(Object.entries(occurrences_src_tgt));
+    const map_src_tgt = new Map(Object.entries(occurrences_src_tgt || {}));
+    const map_tgt_src = new Map(Object.entries(occurrences_tgt_src || {}));
 
-    const map_tgt_src = occurrences_tgt_src instanceof Map
-        ? occurrences_tgt_src
-        : new Map(Object.entries(occurrences_tgt_src));
-
-    // Find common phrases in both directions
+    // Pairs found in both directions are stored once, as direction 0, with the
+    // union of their rows. (The pairs used to be removed from copies only, so
+    // they were merged three times and their sentence counts tripled.)
     console.log('🔍 Identifying bidirectional phrase pairs');
-
-    const occurrences_bidir = new Map();
-
-    try {
-        for (const [key, src_tgt_value] of map_src_tgt.entries()) {
-            if (map_tgt_src.has(key)) {
-                const tgt_src_value = map_tgt_src.get(key);
-                occurrences_bidir.set(key, {
-                    direction: 0, // both directions
-                    rows: new Set([...src_tgt_value.rows, ...tgt_src_value.rows]),
-                });
-
-                // Optionally remove duplicates to avoid reprocessing
-                map_src_tgt.delete(key);
-                map_tgt_src.delete(key);
-            }
-        }
-
-        console.log(`🔄 Found ${occurrences_bidir.size.toLocaleString()} phrases appearing in both directions`);
-    } catch (err) {
-        console.error('❌ Error finding common phrases:', err.message || err);
+    let bidirCount = 0;
+    for (const [key, src_tgt_value] of map_src_tgt.entries()) {
+        const tgt_src_value = map_tgt_src.get(key);
+        if (!tgt_src_value) continue;
+        occurrences.set(key, {
+            direction: 0, // both directions
+            rows: new Set([...src_tgt_value.rows, ...tgt_src_value.rows]),
+        });
+        map_src_tgt.delete(key);
+        map_tgt_src.delete(key);
+        bidirCount++;
     }
+    console.log(`🔄 Found ${bidirCount.toLocaleString()} phrases appearing in both directions`);
 
     // Allow UI to update after bidirectional processing
     await nextFrame();
 
     console.log(`🔄 Merging occurrence maps...`);
-    // Helper to merge occurrence maps
-    const mergeOccurrences = (source) => {
-      for (const [key, value] of Object.entries(source)) {
-        if (occurrences.has(key)) {
-          const currentValue = occurrences.get(key);
-          // Use concat with Array.from to avoid spreading large arrays into function args
-          currentValue.rows = currentValue.rows.concat(Array.from(value.rows));
-        } else {
-          // Make a shallow copy to avoid modifying the original; use Array.from to support Sets/Arrays
-          occurrences.set(key, { ...value, rows: Array.from(value.rows) });
-        }
+    for (const source of [map_src_tgt, map_tgt_src]) {
+      for (const [key, value] of source.entries()) {
+        occurrences.set(key, { direction: value.direction, rows: new Set(value.rows) });
       }
-    };
-
-    mergeOccurrences(occurrences_src_tgt);
-    mergeOccurrences(occurrences_tgt_src);
-    mergeOccurrences(occurrences_bidir);
+    }
 
     console.log(`📊 Total merged phrases: ${occurrences.size.toLocaleString()}`);
 
@@ -357,16 +295,16 @@ async function _extractPhrases(module, pyodide, src_lines, tgt_lines, align_line
             let newCount = 0;
             let mergedCount = 0;
             for (const [key, value] of occurrences_batch.entries()) {
-              let row_ids = Array.from(value.rows);
-
-              row_ids = row_ids.map(id => id + start);
+              const row_ids = Array.from(value.rows, id => id + start);
 
               if (occurrences.has(key)) {
                 const currentValue = occurrences.get(key);
-                currentValue.rows = currentValue.rows.concat(row_ids);
+                for (const id of row_ids) currentValue.rows.add(id);
+                // found in different directions in different batches: both
+                if (currentValue.direction !== value.direction) currentValue.direction = 0;
                 mergedCount++;
               } else {
-                occurrences.set(key, { ...value, rows: row_ids});
+                occurrences.set(key, { direction: value.direction, rows: new Set(row_ids) });
                 newCount++;
               }
             }
@@ -376,7 +314,7 @@ async function _extractPhrases(module, pyodide, src_lines, tgt_lines, align_line
             if (occurrences.size > max_phrases) {
               const countBuckets = new Map(); // count -> Set(keys)
               for (const [key, value] of occurrences.entries()) {
-                const c = value.rows.length;
+                const c = value.rows.size;
                 let s = countBuckets.get(c);
                 if (!s) {
                   s = new Set();
@@ -423,7 +361,7 @@ async function _extractPhrases(module, pyodide, src_lines, tgt_lines, align_line
     }
 
     for (const [key, value] of occurrences.entries()) {
-      const count = value.rows.length;
+      const count = value.rows.size;
       if (count < min_occ || count > max_occ) {
         occurrences.delete(key);
         filteredCount++;
@@ -438,7 +376,7 @@ async function _extractPhrases(module, pyodide, src_lines, tgt_lines, align_line
         src_phrase: src_phrase || '',
         tgt_phrase: tgt_phrase || '',
         direction: value.direction ?? 0,
-        num_occurrences: Array.isArray(value.rows) ? value.rows.length : (value.rows instanceof Set ? value.rows.size : 0),
+        num_occurrences: value.rows.size,
         occurrences: Array.from(value.rows)
       };
     });
