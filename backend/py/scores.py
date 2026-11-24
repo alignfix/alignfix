@@ -7,6 +7,7 @@ from projects import get_alignment_row_ids
 from statistics import median
 
 from lexicon import Lexicon, normalize, is_content, consistency_anomalies, consistency_score
+import progress
 
 
 def write_scores(project_id, scores, row_ids=None):
@@ -31,13 +32,33 @@ def write_scores(project_id, scores, row_ids=None):
     conn.commit()
 
 
-def import_scores_from_file(project_id, scores):
-    try:
-        write_scores(project_id, [round(float(score), 2) for score in scores])
-        return True
-    except (ValueError, TypeError, sqlite3.Error) as e:
-        print("Error occurred while importing scores:", e)
-    return False
+def import_scores_from_file(project_id, lines):
+    """
+    lines: the non-empty lines of a score file, one score per active alignment in
+    corpus order. Raises ValueError (with a message for the user) if a line is
+    not a number or the number of scores does not match the corpus, since
+    skipping a line would shift all following scores onto the wrong sentences.
+    """
+    scores = []
+    bad = []
+    for i, line in enumerate(lines):
+        try:
+            value = float(str(line).strip())
+            if value != value:  # NaN
+                raise ValueError
+            scores.append(round(value, 5))
+        except ValueError:
+            bad.append(i + 1)
+    if bad:
+        shown = ", ".join(str(n) for n in bad[:5]) + (" ..." if len(bad) > 5 else "")
+        raise ValueError(f"{len(bad)} line(s) are not numbers (line {shown}).")
+
+    expected = len(get_alignment_row_ids(project_id))
+    if len(scores) != expected:
+        raise ValueError(f"The file has {len(scores):,} scores, but the project has "
+                         f"{expected:,} sentence pairs (one score per line is expected).")
+    write_scores(project_id, scores)
+    return len(scores)
 
 
 def get_active_rows(project_id):
@@ -73,7 +94,7 @@ def rank_normalize(values):
     return ranks
 
 
-def assign_auto_scores(project_id):
+async def assign_auto_scores(project_id):
     """
     Translation clarity: how predictable the translations of a sentence's words
     are, from the entropy H(O(w)) of each word's outcome distribution (aligned
@@ -83,38 +104,37 @@ def assign_auto_scores(project_id):
     over its content tokens on both sides; scores are rank-normalized and
     inverted, so 1 = clearest and 0 = most ambiguous.
     """
-    try:
+    with progress.stage(0.0, 0.05, "Loading sentences"):
         rows = get_active_rows(project_id)
-        lex = Lexicon.build((line1, line2, align) for _, line1, line2, align in rows)
+    lex = await progress.drive(
+        Lexicon.build_steps((line1, line2, align) for _, line1, line2, align in rows),
+        0.05, 0.6, "Collecting translation statistics")
 
-        known = list(lex.src.entropy.values()) + list(lex.tgt.entropy.values())
-        # Words too rare for reliable statistics get the median entropy.
-        default = median(known) if known else 0.0
+    known = list(lex.src.entropy.values()) + list(lex.tgt.entropy.values())
+    # Words too rare for reliable statistics get the median entropy.
+    default = median(known) if known else 0.0
 
-        print(f"Calculating translation clarity for {len(rows)} alignments "
-              f"({len(lex.src.entropy)} source / {len(lex.tgt.entropy)} target words with statistics).")
+    print(f"Calculating translation clarity for {len(rows)} alignments "
+          f"({len(lex.src.entropy)} source / {len(lex.tgt.entropy)} target words with statistics).")
 
-        raw_scores = []
-        for _, line1, line2, _ in rows:
+    raw_scores = []
+    with progress.stage(0.6, 0.9, "Scoring sentences"):
+        for i, (_, line1, line2, _) in enumerate(rows):
+            await progress.checkpoint(i / len(rows), f"{i:,} / {len(rows):,}")
             entropies = [lex.src.entropy.get(normalize(t), default) for t in line1.split() if is_content(t)]
             entropies += [lex.tgt.entropy.get(normalize(t), default) for t in line2.split() if is_content(t)]
             raw_scores.append(sum(entropies) / len(entropies) if entropies else default)
 
+    with progress.stage(0.9, 1.0, "Saving scores"):
         scores = [round(1 - r, 5) for r in rank_normalize(raw_scores)]
         write_scores(project_id, scores, row_ids=[row[0] for row in rows])
-
-        return True
-
-    except sqlite3.Error as e:
-        print("Error occurred while assigning automatic scores:", e)
-
-    return False
+    return True
 
 # Lexicon of the last consistency run per project, reused to explain single rows.
 _consistency_lexicons = {}
 
 
-def assign_consistency_scores(project_id):
+async def assign_consistency_scores(project_id):
     """
     Alignment consistency: flags sentence pairs containing words that behave
     unlike they usually do in the corpus - left unaligned although they are
@@ -122,28 +142,28 @@ def assign_consistency_scores(project_id):
     side (possible omission, mistranslation or hallucinated addition).
     1 = consistent, lower = more suspicious; see lexicon.consistency_anomalies.
     """
-    try:
+    with progress.stage(0.0, 0.05, "Loading sentences"):
         rows = get_active_rows(project_id)
-        lex = Lexicon.build((line1, line2, align) for _, line1, line2, align in rows)
-        _consistency_lexicons[project_id] = lex
+    lex = await progress.drive(
+        Lexicon.build_steps((line1, line2, align) for _, line1, line2, align in rows),
+        0.05, 0.5, "Collecting translation statistics")
+    _consistency_lexicons[project_id] = lex
 
-        print(f"Calculating alignment consistency for {len(rows)} alignments.")
+    print(f"Calculating alignment consistency for {len(rows)} alignments.")
 
-        scores = []
-        flagged_rows = 0
-        for _, line1, line2, align in rows:
+    scores = []
+    flagged_rows = 0
+    with progress.stage(0.5, 0.95, "Checking sentences"):
+        for i, (_, line1, line2, align) in enumerate(rows):
+            await progress.checkpoint(i / len(rows), f"{i:,} / {len(rows):,}")
             flagged = consistency_anomalies(lex, line1, line2, align)
             flagged_rows += bool(flagged)
             scores.append(round(consistency_score(flagged), 5))
 
-        print(f"{flagged_rows} of {len(rows)} sentence pairs contain unexpected tokens.")
+    print(f"{flagged_rows} of {len(rows)} sentence pairs contain unexpected tokens.")
+    with progress.stage(0.95, 1.0, "Saving scores"):
         write_scores(project_id, scores, row_ids=[row[0] for row in rows])
-        return True
-
-    except sqlite3.Error as e:
-        print("Error occurred while assigning consistency scores:", e)
-
-    return False
+    return True
 
 
 def explain_consistency(project_id, row_id, build=False):

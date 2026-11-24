@@ -27,3 +27,21 @@ export function writeFileInChunks(module, filename, lines, chunkSize = 10000) {
   
   module.FS.close(stream);
 }
+/**
+ * print/printErr options for creating a WASM module: its stdout goes to the
+ * log panel as details (hidden unless "Details" is selected), stderr as
+ * warnings. onLine(text), if given, also receives every stdout line (e.g. to
+ * follow progress messages).
+ */
+export function wasmOutput(name, onLine = null) {
+  const log = window.AlignFixLog || console;
+  return {
+    print: (text) => {
+      if (onLine) {
+        try { onLine(text); } catch (e) { /* progress parsing must not break the module */ }
+      }
+      (log.debug || console.debug)(`[${name}] ${text}`);
+    },
+    printErr: (text) => (log.warn || console.warn)(`[${name}] ${text}`),
+  };
+}

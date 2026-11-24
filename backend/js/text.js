@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-import { writeFileInChunks } from './utils.js';
+import { writeFileInChunks, wasmOutput } from './utils.js';
+import { stage, report, yieldToUI } from '../../ui/activity.js';
 
 export const MAX_LINE_LENGTH = 2000;
 export const MIN_LINE_LENGTH = 1;
@@ -28,82 +29,71 @@ function getTextTokeniseChunkSize(numCores) {
     return 100000;
 }
 
+/**
+ * Read the two files as sentence pairs. Pairs that cannot be processed are
+ * skipped and counted in `skipped` (with the first few line numbers per reason)
+ * so the page can show what was left out. Throws if the line counts differ.
+ */
 export async function getLinesFromFiles(src_file, tgt_file) {
-  const src_content = await src_file.text();
-  const tgt_content = await tgt_file.text();
+  const src_lines = (await src_file.text()).split(/\r?\n/);
+  const tgt_lines = (await tgt_file.text()).split(/\r?\n/);
+  // a final newline is not an extra (empty) line
+  if (src_lines.length > 0 && src_lines[src_lines.length - 1] === "") src_lines.pop();
+  if (tgt_lines.length > 0 && tgt_lines[tgt_lines.length - 1] === "") tgt_lines.pop();
 
-  const src_lines = src_content.split(/\r?\n/);
-  const tgt_lines = tgt_content.split(/\r?\n/);
-
-  // if number of lines differ, alert and return
   if (src_lines.length !== tgt_lines.length) {
-    alert("Source and target files must have the same number of lines.");
-    return { src_lines: [], tgt_lines: [] };
+    throw new Error(`The files must have the same number of lines (source: ${src_lines.length.toLocaleString()}, target: ${tgt_lines.length.toLocaleString()}).`);
   }
 
-  // iterate over line pairs, if one of two empty, skip or if one of two longer than 2000 characters, skip
+  const skipped = {
+    empty: { count: 0, lines: [], label: "an empty side" },
+    tooLong: { count: 0, lines: [], label: `more than ${MAX_LINE_LENGTH.toLocaleString()} characters` },
+    tooManyTokens: { count: 0, lines: [], label: `more than ${MAX_TOKENS_PER_LINE} words` },
+    overLimit: { count: 0, lines: [], label: `beyond the limit of ${MAX_NUM_LINES.toLocaleString()} pairs` },
+  };
+  const skip = (reason, i) => {
+    skipped[reason].count++;
+    if (skipped[reason].lines.length < 5) skipped[reason].lines.push(i + 1);
+  };
+
   const filtered_src_lines = [];
   const filtered_tgt_lines = [];
   for (let i = 0; i < src_lines.length; i++) {
-
-    if (filtered_src_lines.length >= MAX_NUM_LINES) {
-      console.warn(`Reached maximum number of lines (${MAX_NUM_LINES}). Further lines will be skipped.`);
-      break;
-    }
-    
     const src_line = src_lines[i].trim();
     const tgt_line = tgt_lines[i].trim();
     if (src_line.length < MIN_LINE_LENGTH || tgt_line.length < MIN_LINE_LENGTH) {
-      continue;
+      skip("empty", i);
+    } else if (src_line.length > MAX_LINE_LENGTH || tgt_line.length > MAX_LINE_LENGTH) {
+      skip("tooLong", i);
+    } else if (src_line.split(" ").length > MAX_TOKENS_PER_LINE || tgt_line.split(" ").length > MAX_TOKENS_PER_LINE) {
+      skip("tooManyTokens", i);
+    } else if (filtered_src_lines.length >= MAX_NUM_LINES) {
+      skip("overLimit", i);
+    } else {
+      filtered_src_lines.push(src_line);
+      filtered_tgt_lines.push(tgt_line);
     }
-    if (src_line.length > MAX_LINE_LENGTH || tgt_line.length > MAX_LINE_LENGTH) {
-      console.warn(`Skipping line ${i + 1} due to length > ${MAX_LINE_LENGTH} characters.`);
-      continue;
-    }
-
-    const src_num_tokens = src_line.split(" ").length;
-    const tgt_num_tokens = tgt_line.split(" ").length;
-    if (src_num_tokens > MAX_TOKENS_PER_LINE || tgt_num_tokens > MAX_TOKENS_PER_LINE) {
-      console.warn(`Skipping line ${i + 1} due to number of tokens > ${MAX_TOKENS_PER_LINE}.`);
-      continue;
-    }
-
-    filtered_src_lines.push(src_line);
-    filtered_tgt_lines.push(tgt_line);
   }
 
-  return { src_lines: filtered_src_lines, tgt_lines: filtered_tgt_lines };
+  const skippedTotal = Object.values(skipped).reduce((n, r) => n + r.count, 0);
+  for (const reason of Object.values(skipped)) {
+    if (reason.count > 0) {
+      console.warn(`Skipped ${reason.count.toLocaleString()} line pair(s) with ${reason.label} (line ${reason.lines.join(", ")}${reason.count > reason.lines.length ? ", ..." : ""})`);
+    }
+  }
+
+  return { src_lines: filtered_src_lines, tgt_lines: filtered_tgt_lines, total: src_lines.length, skipped, skippedTotal };
 }
 
 async function _tokeniseLines(module, inputLines, numCores) {
-  console.log('operation:Starting text tokenization');
-  console.log('progress:0');
-  
   // Input and output file paths in the virtual filesystem
   const inputFile = "/input.txt";
   const outputFile = "/output.txt";
 
-  console.log(`⚙️ Tokenization configuration: ${numCores} cores, ${inputLines.length.toLocaleString()} lines to process`);
-  
-  console.log('operation:Loading WASM tokenization module');
-  console.log('progress:10');
-  
-  console.log("✅ WASM tokenization module loaded successfully");
-  
-  console.log('operation:Preparing input data for tokenization');
-  console.log('progress:20');
-
-  // Write lines to file in chunks to avoid memory issues
-  console.log(`📝 Writing ${inputLines.length.toLocaleString()} lines to WASM filesystem in chunks...`);
   writeFileInChunks(module, inputFile, inputLines);
-  console.log(`💾 Input data written to virtual filesystem: ${inputFile}`);
-  console.log('progress:30');
+  report(0.1);
+  await yieldToUI();
 
-  console.log('operation:Running tokenization process');
-  console.log(`⏳ Starting tokenization with ${numCores} cores...`);
-  console.log('progress:40');
-
-  // Call the tokenize_file function
   const tokenizeStart = performance.now();
   const result = await module.ccall(
     "tokenize_file", // Function name in C
@@ -111,44 +101,19 @@ async function _tokeniseLines(module, inputLines, numCores) {
     ["string", "string", "number"], // Argument types
     [inputFile, outputFile, numCores] // Arguments
   );
-  const tokenizeEnd = performance.now();
-  const tokenizeDuration = (tokenizeEnd - tokenizeStart) / 1000;
-
-  console.log('progress:70');
-
+  const tokenizeDuration = (performance.now() - tokenizeStart) / 1000;
   if (result !== 0) {
-    console.error("❌ Error tokenizing file - WASM function returned non-zero exit code");
-    throw new Error("Tokenization failed");
+    throw new Error(`Tokenization failed (exit code ${result})`);
   }
+  report(0.8);
 
-  console.log(`✅ Tokenization completed in ${tokenizeDuration.toFixed(2)} seconds`);
-  console.log('operation:Reading and processing tokenized output');
-  console.log('progress:80');
-
-  // Read the tokenized output file
-  const tokenizedContent = await module.FS.readFile(outputFile, { encoding: "utf8" });
-  const outputSizeMB = (tokenizedContent.length / 1024 / 1024).toFixed(2);
-  console.log(`📖 Tokenized output read: ${outputSizeMB} MB`);
-
-  // split on newlines
-  if (!tokenizedContent.trim()) {
-    console.log("⚠️ No tokenized content found - returning empty lines");
-    console.log('progress:100');
-    return new Array(inputLines.length).fill("");
-  }
-  
-  console.log('operation:Sorting and formatting tokenized lines');
-  console.log('progress:85');
-  
   // Each output line is "<line index>|||<tokens>", written by the threads in any
   // order. Place every line at its index so the result has exactly one entry per
   // input line (an empty last input line never reaches the file, for example).
-  const outputLines = tokenizedContent.split("\n");
-  console.log(`📊 Processing ${outputLines.length.toLocaleString()} tokenized lines`);
-
+  const tokenizedContent = module.FS.readFile(outputFile, { encoding: "utf8" });
   const lines = new Array(inputLines.length).fill("");
   let placed = 0;
-  for (const line of outputLines) {
+  for (const line of tokenizedContent.split("\n")) {
     const sep = line.indexOf("|||");
     if (sep < 0) continue;
     const index = parseInt(line.slice(0, sep), 10);
@@ -161,58 +126,36 @@ async function _tokeniseLines(module, inputLines, numCores) {
     console.warn(`⚠️ Tokenizer returned ${placed} of ${inputLines.length} lines; missing lines are left empty`);
   }
 
-  console.log('✅ Lines placed by index');
-  console.log('progress:90');
-
   // free up memory and resources
   module.FS.unlink(inputFile);
-  module.FS.unlink(outputFile)
+  module.FS.unlink(outputFile);
 
-  console.log('✅ Index column removed from output');
-  console.log('progress:100');
-  console.log(`🎯 Tokenization completed successfully!`);
-
+  console.log(`✅ Tokenized ${inputLines.length.toLocaleString()} lines in ${tokenizeDuration.toFixed(2)}s`);
   return lines;
 }
 
+/** Tokenize lines with the C tokenizer. Progress: 0..1 of the current stage. */
 export async function tokeniseLines(inputLines) {
-
   const { createModule, config } = await window.WasmModuleLoader.loadTextTokenize();
   const numCores = parseInt(document.getElementById("num-cores-input")?.value) 
                     || window.navigator.hardwareConcurrency || 1;
   const poolSize = Math.min(config.poolSize, numCores);
 
-  console.log(`⚙️ Initializing WASM module with ${poolSize} worker threads...`);
-  let module = await createModule({ 
-    pthreadPoolSize: poolSize
-  });
-  console.log('✓ WASM module initialized successfully');
+  let module = await createModule({ pthreadPoolSize: poolSize, ...wasmOutput("tokenizer") });
 
   const CHUNK_SIZE = getTextTokeniseChunkSize(poolSize);
   const totalChunks = Math.ceil(inputLines.length / CHUNK_SIZE);
 
   let resultLines = [];
-  
-  // Process chunks sequentially without storing all chunks in memory
   for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
     const startIdx = chunkIndex * CHUNK_SIZE;
     const endIdx = Math.min(startIdx + CHUNK_SIZE, inputLines.length);
-    
-    console.log(`progress:${30 + Math.floor((chunkIndex / totalChunks) * 40)}`); // progress 30-70
-    console.log(`⚙️ Tokenizing chunk ${chunkIndex + 1} of ${totalChunks} (${endIdx - startIdx} lines)`);
-    
-    // Create chunk view without copying data
-    const inputChunk = inputLines.slice(startIdx, endIdx);
-    const resultChunk = await _tokeniseLines(module, inputChunk, numCores);
+    const label = totalChunks > 1 ? `part ${chunkIndex + 1} of ${totalChunks}` : "";
+    const resultChunk = await stage(chunkIndex / totalChunks, (chunkIndex + 1) / totalChunks, label,
+      () => _tokeniseLines(module, inputLines.slice(startIdx, endIdx), poolSize));
     resultLines = resultLines.concat(resultChunk);
-    
-    // Clear chunk reference to help GC
-    inputChunk.length = 0;
   }
 
-  // allow GC to run
   module = null;
-  await new Promise(r => setTimeout(r, 100)); // Give more time for cleanup
-
   return resultLines;
 }

@@ -91,21 +91,16 @@ export async function saveProject(project_id) {
   return true;
 }
 
-export function deleteProject(projectId) {
-    if (!confirm(`Are you sure you want to delete project ${projectId}? This action cannot be undone.`)) {
-        return;
-    }
-
-    initPyodide().then(async pyodide => {
-        pyodide.globals.set("project_id", projectId);
-        await pyodide.runPythonAsync(`
-            from projects import delete_project
-            delete_project(project_id)
-        `);
-        
-        await safeSyncfs(pyodide);
-        console.log(`Project ${projectId} deleted`);
-    });
+/** Delete a project (the caller asks for confirmation). */
+export async function deleteProject(projectId) {
+    const pyodide = await initPyodide();
+    pyodide.globals.set("project_id", projectId);
+    await pyodide.runPythonAsync(`
+        from projects import delete_project
+        delete_project(project_id)
+    `);
+    await safeSyncfs(pyodide);
+    console.log(`Project ${projectId} deleted`);
 }
 
 export async function downloadProject(project_id) {

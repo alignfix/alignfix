@@ -16,11 +16,12 @@
 
 import { initPyodide } from "../../pyodide.js";
 import { profiler } from '../../ui/profiler.js';
-import { nextFrame } from "../../ui/utils.js";
+import { stage, report, yieldToUI } from "../../ui/activity.js";
 import { getLinesStats } from "./stats.js"; 
 import { safeSyncfs } from "./storage.js";
+import { wasmOutput } from "./utils.js";
 
-const SAVE_BATCH_SIZE = 100000; // adjust based on memory
+const SAVE_BATCH_SIZE = 20000; // phrases per database call (progress is reported in between)
 
 function trimPhrase(phrase) {
   // trim #NB at start and end of phrases
@@ -65,7 +66,6 @@ async function extractDirectedPhrases(module, src_lines, tgt_lines, align_lines,
     const scoreFilename = "/score.txt";
     const ignoreFilename = "/ignore.txt";
 
-    console.log(`🔄 Processing ${src_lines.length.toLocaleString()} lines in single pass (direction: ${direction})`);
 
     // Write all data to virtual filesystem at once
     module.FS.writeFile(srcFilename, src_lines.join("\n"));
@@ -77,19 +77,15 @@ async function extractDirectedPhrases(module, src_lines, tgt_lines, align_lines,
     if (ignore_pairs && ignore_pairs.length > 0) {
         const ignore_content = ignore_pairs.map(pair => pair.join('|||')).join('\n');
         module.FS.writeFile(ignoreFilename, ignore_content);
-        console.log(`🚫 Written ${ignore_pairs.length.toLocaleString()} phrases to ignore to WASM filesystem`);
     } else {
         module.FS.writeFile(ignoreFilename, "");
-        console.log(`🚫 No phrases to ignore provided, created empty ignore file in WASM filesystem`);
     }
 
     const numPhrasesToIgnore = ignore_pairs ? ignore_pairs.length : 0;
 
-    console.log(`📁 Written all files to WASM filesystem`);
-    
     // Allow UI to update after file writing
-    console.log(`Calling extract_phrases_parallel_main (numCores: ${numCores})...`);
-    await nextFrame();
+    report(0.1);
+    await yieldToUI();
 
     const start_idx = 0;
     const end_idx = src_lines.length;
@@ -125,9 +121,8 @@ async function extractDirectedPhrases(module, src_lines, tgt_lines, align_lines,
           const [phrase1, phrase2] = line.split('|||').map(part => trimPhrase(part.trim()));
           return `${phrase1}|||${phrase2}`;
         }));
-        console.log(`🚫 Loaded ${ignore_set.size.toLocaleString()} additional phrases to ignore from extraction`);
     } catch (err) {
-        console.log('ℹ️ No additional ignore phrases found during extraction');
+        // no file: no pairs above the threshold
     }
 
     // Cleanup files
@@ -144,17 +139,12 @@ async function extractDirectedPhrases(module, src_lines, tgt_lines, align_lines,
 }
 
 async function extractPhrasesBatch(module, src_lines, tgt_lines, align_lines, score_lines, min_phrase_length, max_phrase_length, threshold, numCores, ignore_pairs) {
-    console.log(`🚀 extractPhrasesBatch: Processing ${src_lines.length.toLocaleString()} lines`);
     const startTime = performance.now();
     
     // Use a Map for efficient key-based access
     const occurrences = new Map();
 
-    // Allow UI to update before starting extraction
-    await nextFrame();
-
-    console.log(`🔄 Extracting src→tgt phrases...`);
-    const [occurrences_src_tgt, ignore_src_tgt] = await extractDirectedPhrases(
+    const [occurrences_src_tgt, ignore_src_tgt] = await stage(0, 0.45, "source → target", () => extractDirectedPhrases(
         module,
         src_lines,
         tgt_lines,
@@ -166,10 +156,9 @@ async function extractPhrasesBatch(module, src_lines, tgt_lines, align_lines, sc
         threshold,
         numCores,
         ignore_pairs
-    );
+    ));
 
-    console.log(`🔄 Extracting tgt→src phrases...`);
-    const [occurrences_tgt_src, ignore_tgt_src] = await extractDirectedPhrases(
+    const [occurrences_tgt_src, ignore_tgt_src] = await stage(0.45, 0.9, "target → source", () => extractDirectedPhrases(
         module,
         src_lines,
         tgt_lines,
@@ -181,7 +170,9 @@ async function extractPhrasesBatch(module, src_lines, tgt_lines, align_lines, sc
         threshold,
         numCores,
         ignore_pairs
-    );
+    ));
+    report(0.9, "merging");
+    await yieldToUI();
 
     console.log(`📊 Extracted ${Object.keys(occurrences_src_tgt || {}).length} src→tgt and ${Object.keys(occurrences_tgt_src || {}).length} tgt→src phrases`);
 
@@ -206,8 +197,6 @@ async function extractPhrasesBatch(module, src_lines, tgt_lines, align_lines, sc
     }
     console.log(`🔄 Found ${bidirCount.toLocaleString()} phrases appearing in both directions`);
 
-    // Allow UI to update after bidirectional processing
-    await nextFrame();
 
     console.log(`🔄 Merging occurrence maps...`);
     for (const source of [map_src_tgt, map_tgt_src]) {
@@ -220,7 +209,7 @@ async function extractPhrasesBatch(module, src_lines, tgt_lines, align_lines, sc
 
     const endTime = performance.now();
     const duration = (endTime - startTime) / 1000;
-    console.log(`✅ extractPhrasesBatch completed in ${duration.toFixed(2)}s: ${occurrences.size.toLocaleString()} phrases`);
+    console.log(`✅ ${src_lines.length.toLocaleString()} sentence pairs: ${occurrences.size.toLocaleString()} phrase pairs (${duration.toFixed(2)}s)`);
 
     // Pairs seen in sentences scoring above the threshold (not extracted there)
     const aboveThreshold = new Set([...ignore_src_tgt, ...ignore_tgt_src]);
@@ -261,7 +250,9 @@ async function _extractPhrases(module, pyodide, src_lines, tgt_lines, align_line
     const max_phrase_length = parseInt(document.getElementById("max-phrase-length-input")?.value) || 3;
     let min_occ = parseInt(document.getElementById("min-occurrences-input")?.value) || 3;
     let max_occ = parseInt(document.getElementById("max-occurrences-input")?.value) || 300;
-    const max_phrases = parseInt(document.getElementById("max-phrases-input")?.value) || 500_000;
+    // project page: max-phrases-input; new project (home page): limit-num-phrases-input
+    const max_phrases = parseInt(document.getElementById("max-phrases-input")?.value
+      ?? document.getElementById("limit-num-phrases-input")?.value) || 500_000;
 
     const BATCH_SIZE = getBatchSize(max_phrase_length);
     console.log(`Batch size for phrase length ${max_phrase_length}:`, BATCH_SIZE);
@@ -277,17 +268,16 @@ async function _extractPhrases(module, pyodide, src_lines, tgt_lines, align_line
         const end = Math.min(start + BATCH_SIZE, totalLines);
         const batchStartTime = performance.now();
 
-        console.log(`📦 Processing batch ${batchIdx + 1}/${numBatches} (${(end - start).toLocaleString()} lines)`);
-        // log current min_occ 
-        console.log(`🔍 Current min_occ: ${min_occ}, max_occ: ${max_occ}`);
-        
-        // Allow UI to update before starting batch
-        await nextFrame();
+        if (numBatches > 1) {
+            console.log(`📦 Batch ${batchIdx + 1}/${numBatches} (${(end - start).toLocaleString()} lines)`);
+        }
+        const batchLabel = numBatches > 1 ? `part ${batchIdx + 1} of ${numBatches}` : "";
 
         // Slice on-the-fly, no precomputed chunk arrays
-        try {
-            console.log(`🔄 Calling extractPhrasesBatch for lines ${start}-${end}`);
-            const [occurrences_batch, aboveThresholdBatch] = await extractPhrasesBatch(
+        // (an error fails the whole extraction: skipping a batch would silently
+        // drop its phrases)
+        {
+            const [occurrences_batch, aboveThresholdBatch] = await stage(batchIdx / numBatches, (batchIdx + 1) / numBatches, batchLabel, () => extractPhrasesBatch(
                 module,
                 src_lines.slice(start, end),
                 tgt_lines.slice(start, end),
@@ -298,7 +288,7 @@ async function _extractPhrases(module, pyodide, src_lines, tgt_lines, align_line
                 threshold, 
                 numCores,
                 ignore_pairs
-            );
+            ));
 
             // 🔄 Merge occurrences_batch into occurrences
             let newCount = 0;
@@ -357,22 +347,12 @@ async function _extractPhrases(module, pyodide, src_lines, tgt_lines, align_line
               }
             }
 
-            const batchEndTime = performance.now();
-            const batchDuration = (batchEndTime - batchStartTime) / 1000;
-            console.log(`✅ Batch ${batchIdx + 1}/${numBatches} completed in ${batchDuration.toFixed(2)}s`);
-            console.log(`📈 Total phrases accumulated: ${occurrences.size.toLocaleString()}`);
-            // wait to flush
-            await nextFrame();
-            
-        } catch (err) {
-            console.log('ℹ️ No additional ignore phrases found during extraction');
-            console.error(`❌ Error in batch ${batchIdx + 1}:`, err);
+            if (numBatches > 1) {
+                const batchDuration = (performance.now() - batchStartTime) / 1000;
+                console.log(`✅ Batch ${batchIdx + 1}/${numBatches} done in ${batchDuration.toFixed(2)}s, ${occurrences.size.toLocaleString()} phrase pairs so far`);
+            }
+            await yieldToUI();
         }
-
-        console.log(`🎯 Batch ${batchIdx + 1}/${numBatches} completed with ${(end - start).toLocaleString()} lines processed`);
-        
-        // Allow UI to update after batch completion
-        await new Promise(r => setTimeout(r, 25));
     }
 
     for (const [key, value] of occurrences.entries()) {
@@ -383,7 +363,7 @@ async function _extractPhrases(module, pyodide, src_lines, tgt_lines, align_line
       }
     }
 
-    console.log(`✅ All batches processed. Total phrases: ${occurrences.size.toLocaleString()}`);
+    console.log(`✅ ${occurrences.size.toLocaleString()} phrase pairs with ${min_occ}–${max_occ} occurrences`);
     // Convert occurrences Map into an array of phrase objects for saving/consumption
     const phrasesArray = Array.from(occurrences.entries()).map(([key, value]) => {
       const [src_phrase, tgt_phrase] = key.split('|||');
@@ -430,18 +410,14 @@ async function _extractPhrases(module, pyodide, src_lines, tgt_lines, align_line
   return [phrasesArray, stats_obj];
 }
 
+/** Extract and store the phrase pairs of a project. Progress: 0..1 of the current stage. */
 export async function extractPhrases(project_id) {
-    const startTime = performance.now();
-    console.log(`operation:Starting phrase extraction for project ${project_id}`);
-    console.log('progress:0');
-    
     const pyodide = await initPyodide(); 
     pyodide.globals.set("project_id", project_id);
 
     // Load alignments and ignored phrases
-    console.log('operation:Loading alignments and ignored phrases');
-    const result = await profiler.measure('load_alignments_py', async () => {
-      return pyodide.runPythonAsync(`
+    const [src_lines, tgt_lines, align_lines, score_lines, ignore_pairs, rowIds] = await stage(0, 0.05, "Loading sentences", async () => {
+      const result = await profiler.measure('load_alignments_py', () => pyodide.runPythonAsync(`
         from projects import get_alignments, get_alignment_row_ids
         from phrases import get_all_phrases_to_ignore
 
@@ -450,34 +426,24 @@ export async function extractPhrases(project_id) {
         ignore_pairs = set(get_all_phrases_to_ignore(project_id))
 
         (src_lines, tgt_lines, align_lines, score_lines, list(ignore_pairs), row_ids)
-      `);
+      `));
+      const [src, tgt, align, scores, ignore, row_ids_proxy] = result;
+      // The extraction works on list positions; occurrences must be stored as row ids,
+      // which differ from positions once lines have been deleted.
+      console.log(`📊 Loaded ${src.length.toLocaleString()} sentence pairs, ${ignore.length.toLocaleString()} hidden phrases`);
+      return [src, tgt, align, scores, ignore, Array.from(row_ids_proxy)];
     });
-    const [src_lines, tgt_lines, align_lines, score_lines, ignore_pairs, row_ids_proxy] = result;
-    // The extraction works on list positions; occurrences must be stored as row ids,
-    // which differ from positions once lines have been deleted.
-    const rowIds = Array.from(row_ids_proxy);
-    
-    console.log(`📊 Loaded ${src_lines.length.toLocaleString()} alignment pairs`);
-    console.log(`🚫 Found ${ignore_pairs.length.toLocaleString()} phrases to ignore`);
-    console.log('progress:5');
-
 
     const numCores = parseInt(document.getElementById("num-cores-input")?.value) || window.navigator.hardwareConcurrency || 1;
 
-    // Initialize WASM module
-    console.log('operation:Initializing WASM extraction module');
+    const { module, poolSize } = await stage(0.05, 0.08, "Loading extraction module", async () => {
+      const { createModule, config } = await window.WasmModuleLoader.loadPhraseExtraction();
+      const poolSize = Math.min(config.poolSize, numCores);
+      const module = await createModule({ pthreadPoolSize: poolSize, ...wasmOutput("phrase_extraction") });
+      return { module, poolSize };
+    });
 
-    const { createModule, config } = await window.WasmModuleLoader.loadPhraseExtraction();
-    const poolSize = Math.min(config.poolSize, numCores);
-
-    console.log(`⚙️ Initializing WASM module with ${poolSize} worker threads...`);
-    const module = await createModule({ pthreadPoolSize: poolSize });
-    console.log('✓ WASM module initialized successfully');
-    console.log('progress:10');
-
-    // Prepare data chunks
-    console.log('operation:Preparing data chunks for processing');
-    const [phrases, stats_obj] = await _extractPhrases(
+    const [phrases, stats_obj] = await stage(0.08, 0.8, "Extracting phrase pairs", () => _extractPhrases(
       module,
       pyodide,
       src_lines, 
@@ -486,23 +452,26 @@ export async function extractPhrases(project_id) {
       score_lines, 
       poolSize,
       ignore_pairs
-    );
+    ));
     for (const phrase of phrases) {
       phrase.occurrences = phrase.occurrences.map(position => rowIds[position]);
     }
-    
-    try {
+
+    await stage(0.8, 1, "Saving phrase pairs", async () => {
         pyodide.globals.set("project_id", project_id);
         const startDeleteTime = performance.now();
+        report(0, "removing the previous phrase pairs");
+        await yieldToUI();
         await pyodide.runPythonAsync(`
             from phrases import delete_phrases
             delete_phrases(project_id)
         `);
         const endDeleteTime = performance.now();
-        console.log(`🗑️ Deleted existing phrases for project ${project_id} before saving new ones`);
-        
+
         const startSaveTime = performance.now();
         for (let i = 0; i < phrases.length; i += SAVE_BATCH_SIZE) {
+            report(0.25 + 0.65 * i / phrases.length, `${i.toLocaleString()} of ${phrases.length.toLocaleString()}`);
+            await yieldToUI();
             const batch = phrases.slice(i, i + SAVE_BATCH_SIZE);
             pyodide.globals.set("phrases_batch", pyodide.toPy(batch));
             await pyodide.runPythonAsync(`
@@ -510,22 +479,17 @@ export async function extractPhrases(project_id) {
               save_phrases(project_id, phrases_batch)
             `);
             pyodide.globals.delete("phrases_batch");
-            console.log(`💾 Saved batch ${i / SAVE_BATCH_SIZE + 1} / ${Math.ceil(phrases.length / SAVE_BATCH_SIZE)}`);
         }
         const endSaveTime = performance.now();
-        console.log(`⏱️ Phrases saved in ${(endSaveTime - startSaveTime) / 1000} seconds`);
+        console.log(`💾 Saved ${phrases.length.toLocaleString()} phrase pairs in ${((endSaveTime - startSaveTime) / 1000).toFixed(1)}s`);
 
         // add to stats duration of delete and save
         stats_obj.db_delete_duration_seconds = (endDeleteTime - startDeleteTime) / 1000;
         stats_obj.db_insert_duration_seconds = (endSaveTime - startSaveTime) / 1000;
-        console.log('progress:100');
 
-    } catch (err) {
-        console.error('❌ Critical error during phrase processing:', err.message || err);
-        throw err;
-    }
-    
-    await safeSyncfs(pyodide);
+        report(0.9, "writing to browser storage");
+        await safeSyncfs(pyodide);
+    });
     return stats_obj;
 }
 

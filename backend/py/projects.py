@@ -114,11 +114,14 @@ def get_alignment_row_ids(project_id):
     cursor.execute("SELECT row_id FROM alignments WHERE project_id=? AND deleted_at IS NULL ORDER BY row_id", (project_id,))
     return [row[0] for row in cursor.fetchall()]
 
-def save_alignments(project_id, src_lines, tgt_lines, align_lines, score_lines):
+def save_alignments(project_id, src_lines, tgt_lines, align_lines, score_lines, first_row_id=0):
+    """Insert sentence pairs as rows first_row_id, first_row_id + 1, ... (callable in chunks)."""
     conn, cursor = get_db()
-    for row_id, (src, tgt, align, score) in enumerate(zip(src_lines, tgt_lines, align_lines, score_lines)):
-        cursor.execute('INSERT INTO alignments (row_id, line1, line2, alignment, score, synced_at, project_id) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)',
-                  (row_id, src, tgt, align, score, project_id))
+    cursor.executemany(
+        'INSERT INTO alignments (row_id, line1, line2, alignment, score, synced_at, project_id) '
+        'VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)',
+        ((first_row_id + i, src, tgt, align, score, project_id)
+         for i, (src, tgt, align, score) in enumerate(zip(src_lines, tgt_lines, align_lines, score_lines))))
     conn.commit()
 
 def update_alignments(project_id, align_lines, row_ids=None):
@@ -128,9 +131,9 @@ def update_alignments(project_id, align_lines, row_ids=None):
         row_ids = get_alignment_row_ids(project_id)
     if len(row_ids) != len(align_lines):
         raise ValueError(f"Got {len(align_lines)} alignments for {len(row_ids)} rows")
-    for row_id, align in zip(row_ids, align_lines):
-        cursor.execute('UPDATE alignments SET alignment=?, synced_at=CURRENT_TIMESTAMP WHERE row_id=? AND project_id=?',
-                  (align, row_id, project_id))
+    cursor.executemany(
+        'UPDATE alignments SET alignment=?, synced_at=CURRENT_TIMESTAMP WHERE row_id=? AND project_id=?',
+        ((align, row_id, project_id) for row_id, align in zip(row_ids, align_lines)))
     conn.commit()
 
 def find_entry(xs, a, b):

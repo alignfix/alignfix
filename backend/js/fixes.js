@@ -16,6 +16,7 @@
 
 import { initPyodide } from "../../pyodide.js";
 import { safeSyncfs } from "./storage.js";
+import { stage, report } from "../../ui/activity.js";
 
 export async function applyFixes(project_id, fixes) {
   const pyodide = await initPyodide();
@@ -25,15 +26,16 @@ export async function applyFixes(project_id, fixes) {
 
   const startTime = performance.now();
 
-  await pyodide.runPythonAsync(`
+  await stage(0, 0.95, "", () => pyodide.runPythonAsync(`
+      import json
       from fixes import apply_fixes
       fixes = json.loads(fixes_json)
-      apply_fixes(project_id, fixes)
-  `);
+      await apply_fixes(project_id, fixes)
+  `));
 
-  const endTime = performance.now();
-  console.log(`Applied fixes in ${(endTime - startTime).toFixed(2)} ms`);
+  console.log(`Applied ${fixes.length} fix(es) in ${((performance.now() - startTime) / 1000).toFixed(1)}s`);
 
+  report(undefined, "writing to browser storage");
   await safeSyncfs(pyodide);
 
   return;

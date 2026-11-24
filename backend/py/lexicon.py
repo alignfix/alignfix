@@ -93,12 +93,28 @@ class Lexicon:
     @classmethod
     def build(cls, rows, min_support=MIN_SUPPORT):
         """rows: iterable of (line1, line2, alignment) with tokenised lines."""
+        steps = cls.build_steps(rows, min_support)
+        while True:
+            try:
+                next(steps)
+            except StopIteration as done:
+                return done.value
+
+    @classmethod
+    def build_steps(cls, rows, min_support=MIN_SUPPORT, every=5000):
+        """
+        Like build(), as a generator that yields its progress (0..1) every
+        `every` rows and returns the Lexicon (see progress.drive).
+        """
         lex = cls(min_support)
         rows = list(rows)
+        total = 2 * len(rows) or 1
 
         # Pass 1: unigram counts, so link counts are only kept for words that will
         # get statistics (keeps memory bounded on large corpora).
-        for line1, line2, _ in rows:
+        for i, (line1, line2, _) in enumerate(rows):
+            if i % every == 0:
+                yield i / total
             for tok in line1.split():
                 if is_content(tok):
                     lex.src.count[normalize(tok)] += 1
@@ -110,7 +126,9 @@ class Lexicon:
         tgt_ok = {w for w, n in lex.tgt.count.items() if n >= min_support}
 
         # Pass 2: aligned rates and link counts.
-        for line1, line2, alignment in rows:
+        for i, (line1, line2, alignment) in enumerate(rows):
+            if i % every == 0:
+                yield (len(rows) + i) / total
             src = [normalize(t) if is_content(t) else None for t in line1.split()]
             tgt = [normalize(t) if is_content(t) else None for t in line2.split()]
             links = _parse_links(alignment, len(src), len(tgt))

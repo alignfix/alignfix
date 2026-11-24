@@ -1,4 +1,4 @@
-# py/projects.py
+# py/fixes.py
 import random
 import time
 import json
@@ -11,6 +11,7 @@ from phrases import get_directed_phrases_from_texts_and_alignment, get_phrase_oc
 from projects import search_translations
 from utils import find_all_sublists
 from db import get_db
+import progress
 
 def update_row(project_id, row_id, updates):
     _, cursor = get_db()
@@ -204,14 +205,13 @@ def resync_pairs(project_id, pairs):
     
     conn.commit()
 
-def apply_directed_fixes(
+async def apply_directed_fixes(
     document_id,
     fixes,
     fix_direction=1
 ):
+    """Progress: 0-80% for the fixes, the rest for updating the phrase tables."""
     direction_name = "forward (src→tgt)" if fix_direction == 1 else "reverse (tgt→src)"
-    print(f"operation:Applying {len(fixes)} fixes in {direction_name} direction")
-    print('progress:0')
 
     sort_key = "src_phrase" if fix_direction==1 else "tgt_phrase"
 
@@ -228,10 +228,8 @@ def apply_directed_fixes(
     total_occurrences_modified = 0
 
     for fix_i, fix_obj in enumerate(fixes):
-        # Progress through fixes (0-80%)
-        fix_progress = int((fix_i / total_fixes) * 80)
-        print(f'progress:{fix_progress}')
-        print(f"operation:Processing fix {fix_i + 1}/{total_fixes}: {fix_obj.get('src_phrase', '')} → {fix_obj.get('tgt_phrase', '')}")
+        fix_label = f"fix {fix_i + 1}/{total_fixes}: {fix_obj.get('src_phrase', '')} → {fix_obj.get('tgt_phrase', '')}"
+        await progress.checkpoint(0.8 * fix_i / total_fixes, fix_label, force=True)
 
         src_phrase = fix_obj["src_phrase"]
         tgt_phrase = fix_obj["tgt_phrase"]
@@ -318,8 +316,9 @@ def apply_directed_fixes(
         total_occurrences_modified += len(res)
 
         for di, doc in enumerate(res):
-            if di % 100 == 0 and di > 0:
-                print(f"⏳ Processing occurrence {di + 1}/{len(res)}")
+            await progress.checkpoint(
+                0.8 * (fix_i + di / len(res)) / total_fixes,
+                f"{fix_label} (sentence {di + 1:,} of {len(res):,})")
             
             row_id = doc["row_id"]
             line1 = doc["line1"]
@@ -435,22 +434,18 @@ def apply_directed_fixes(
         applied_fixes += 1
         print(f"✅ Fix applied successfully to {len(res)} occurrences")
 
-    print('progress:80')
-    print('operation:Refreshing phrase occurrences in database')
+    await progress.checkpoint(0.8, "updating phrase occurrences", force=True)
     print(f"🔄 Refreshing {len(rows_to_refresh)} rows for document {document_id}")        
     remove_occurrences_for_rows(document_id, rows_to_refresh)
 
-    print('progress:85')
-    print('operation:Adding new phrase occurrences')
+    await progress.checkpoint(0.85, "adding new phrase occurrences", force=True)
     print(f"➕ Adding {len(pairs_to_add)} phrase occurrences for document {document_id}")
     add_phrase_occurrences(document_id, pairs_to_add)
 
-    print('progress:90')
-    print('operation:Resyncing phrase statistics')
+    await progress.checkpoint(0.9, "updating phrase counts", force=True)
     print(f"🔄 Resyncing {len(pairs_to_resync)} phrases for document {document_id}")
     resync_pairs(document_id, pairs_to_resync)
 
-    print('progress:100')
     print(f"✅ {direction_name} fixes completed!")
     print(f"📊 Summary:")
     print(f"   • Total fixes processed: {total_fixes}")
@@ -462,12 +457,10 @@ def apply_directed_fixes(
 
     return True
 
-def apply_fixes(project_id, fixes):
+async def apply_fixes(project_id, fixes):
     start_time = time.time()
-    
-    print(f"operation:Starting fix application for document {project_id}")
-    print('progress:0')
-    print(f"🚀 Starting application of {len(fixes)} fixes to document {project_id}")
+
+    print(f"🚀 Applying {len(fixes)} fixes to project {project_id}")
 
     # Separate fixes by type
     replacement_fixes = [f for f in fixes if f.get("type", "fix") == "fix"]
@@ -475,58 +468,54 @@ def apply_fixes(project_id, fixes):
 
     print(f"📊 Fixes breakdown: {len(replacement_fixes)} replacements, {len(duplication_fixes)} duplications")
 
+    # Share of the progress bar per part, proportional to the number of fixes
+    # (replacements run twice, once per direction).
+    parts = [("augment", len(duplication_fixes)), ("forward", len(replacement_fixes)),
+             ("reverse", len(replacement_fixes))]
+    total = sum(n for _, n in parts) or 1
+    ranges, position = {}, 0.0
+    for name, n in parts:
+        ranges[name] = (position, position + 0.95 * n / total)
+        position = ranges[name][1]
+
     # Track duplicated rows to avoid duplicating them twice
     duplicated_rows = set()
 
     # Apply duplication fixes first (both directions together to avoid double duplication)
     if duplication_fixes:
-        print('progress:5')
-        print(f"operation:Applying {len(duplication_fixes)} duplication fixes")
-        duplicated_rows = apply_duplication_fixes(project_id, duplication_fixes)
+        with progress.stage(*ranges["augment"], f"Duplicating sentences ({len(duplication_fixes)} augmentations)"):
+            duplicated_rows = await apply_duplication_fixes(project_id, duplication_fixes)
 
     # Apply replacement fixes by direction
     if replacement_fixes:
-        print(f"operation:Applying replacement fixes in forward direction")
-        print('progress:30')
         print(f"📋 Applying {len(replacement_fixes)} replacement fixes, forward direction")
-        apply_directed_fixes(
-            project_id,
-            replacement_fixes,
-            fix_direction=1
-        )
+        with progress.stage(*ranges["forward"], "Replacing in target sentences"):
+            await apply_directed_fixes(project_id, replacement_fixes, fix_direction=1)
 
-        print(f"operation:Applying replacement fixes in reverse direction") 
-        print('progress:65')
         print(f"📋 Applying {len(replacement_fixes)} replacement fixes, reverse direction")
-        apply_directed_fixes(
-            project_id,
-            replacement_fixes,
-            fix_direction=-1
-        )
+        with progress.stage(*ranges["reverse"], "Replacing in source sentences"):
+            await apply_directed_fixes(project_id, replacement_fixes, fix_direction=-1)
 
     if fixes:
-        print('progress:95')
-        print('operation:Saving fixes to database')
-        print("💾 Saving fixes to database")
-        save_fixes(project_id, fixes)
-        
-        print('operation:Cleaning up unused phrases')
-        print("🧹 Cleaning up phrases without occurrences")
-        delete_phrases_without_occurrence(project_id)
+        with progress.stage(0.95, 1.0, "Saving fixes"):
+            await progress.checkpoint(force=True)
+            print("💾 Saving fixes to database")
+            save_fixes(project_id, fixes)
 
-    end_time = time.time()
-    total_duration = end_time - start_time
-    
-    print('progress:100')
-    print(f"🎉 Fix application completed successfully!")
-    print(f"⏱️ Total processing time: {total_duration:.2f} seconds")
+            print("🧹 Cleaning up phrases without occurrences")
+            delete_phrases_without_occurrence(project_id)
+
+    total_duration = time.time() - start_time
+
+    print(f"🎉 Fix application completed in {total_duration:.2f} seconds")
     print(f"📊 Duplicated rows: {len(duplicated_rows)}")
-    print(f"📊 Average time per fix: {(total_duration / len(fixes)):.3f} seconds" if fixes else "")
+    if fixes:
+        print(f"📊 Average time per fix: {(total_duration / len(fixes)):.3f} seconds")
 
     return True
 
 
-def apply_duplication_fixes(project_id, fixes):
+async def apply_duplication_fixes(project_id, fixes):
     """
     Apply duplication fixes (augmentation). 
     Processes both directions together to avoid duplicating rows twice.
@@ -534,8 +523,6 @@ def apply_duplication_fixes(project_id, fixes):
     """
     conn, cursor = get_db()
     
-    print(f"operation:Applying {len(fixes)} duplication fixes")
-    print('progress:0')
 
     duplicated_rows = set()
     pairs_to_add = defaultdict(list)
@@ -553,9 +540,8 @@ def apply_duplication_fixes(project_id, fixes):
     next_row_id = 0 if max_row_id is None else max_row_id + 1
 
     for fix_i, fix_obj in enumerate(fixes):
-        fix_progress = int((fix_i / total_fixes) * 20)  # 0-20% progress
-        print(f'progress:{fix_progress}')
-        print(f"operation:Processing duplication {fix_i + 1}/{total_fixes}")
+        fix_label = f"augmentation {fix_i + 1}/{total_fixes}: {fix_obj.get('src_phrase', '')} → {fix_obj.get('tgt_phrase', '')}"
+        await progress.checkpoint(0.8 * fix_i / total_fixes, fix_label, force=True)
 
         src_phrase = fix_obj["src_phrase"]
         tgt_phrase = fix_obj["tgt_phrase"]
@@ -618,6 +604,9 @@ def apply_duplication_fixes(project_id, fixes):
 
         # Duplicate each matching row
         for doc_idx, doc in enumerate(res):
+            await progress.checkpoint(
+                0.8 * (fix_i + doc_idx / len(res)) / total_fixes,
+                f"{fix_label} (sentence {doc_idx + 1:,} of {len(res):,})")
             row_id = doc["row_id"]
             line1 = doc["line1"]
             line2 = doc["line2"]
@@ -680,17 +669,14 @@ def apply_duplication_fixes(project_id, fixes):
         applied_fixes += 1
         print(f"✅ Duplication applied to {len(res)} occurrences")
 
-    print('progress:20')
-    print('operation:Adding phrase occurrences for duplicated rows')
+    await progress.checkpoint(0.8, "adding phrase occurrences", force=True)
     print(f"➕ Adding {len(pairs_to_add)} phrase occurrences")
     add_phrase_occurrences(project_id, pairs_to_add)
     
-    print('progress:22')
-    print('operation:Resyncing phrase statistics')
+    await progress.checkpoint(0.9, "updating phrase counts", force=True)
     print(f"🔄 Resyncing {len(pairs_to_resync)} phrases for project {project_id}")
     resync_pairs(project_id, pairs_to_resync)
 
-    print('progress:25')
     print(f"✅ Duplication completed!")
     print(f"📊 Summary:")
     print(f"   • Total fixes processed: {total_fixes}")

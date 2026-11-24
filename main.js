@@ -16,25 +16,31 @@
 
 import { initPyodide } from "./pyodide.js";
 import { router } from "./router.js";
-
-function showLoader(show) {
-  const loader = document.querySelector(".loader");
-  if (loader) {
-    loader.style.display = show ? "inline-block" : "none";
-  }
-  var logContainer = document.getElementById('log');
-  if (logContainer) {
-    if (show) {
-      logContainer.classList.add('show');
-    } else {
-      logContainer.classList.remove('show');
-    }
-  }
-}
+import { runActivity } from "./ui/activity.js";
 
 (async function main() {
-  showLoader(true);
-  await initPyodide();
+  const app = document.getElementById("app");
+  app.innerHTML = `
+    <div class="startup text-center text-muted py-5">
+      <div class="spinner-border text-primary mb-3" role="status"></div>
+      <h5>Starting AlignFix…</h5>
+      <p class="small mb-0">The first start downloads the Python runtime (about 30 MB);
+        later starts use the browser cache. Everything runs locally in your browser.</p>
+    </div>`;
+  try {
+    await runActivity("Starting AlignFix", () => initPyodide(), { done: () => "Ready" });
+  } catch (err) {
+    app.innerHTML = `
+      <div class="alert alert-danger m-4">
+        <h5 class="alert-heading"><i class="fas fa-circle-exclamation me-2"></i>AlignFix could not start</h5>
+        <p class="mb-1">The Python runtime or the database could not be loaded. Check your internet
+          connection (needed for the first start) and reload the page; the logs above show the details.</p>
+      </div>`;
+    const detail = document.createElement("pre");
+    detail.className = "small mb-0 mt-2";
+    detail.textContent = String(err && err.message || err);
+    app.querySelector(".alert").appendChild(detail);
+    return;
+  }
   router(); // render initial page
-  showLoader(false);
 })();

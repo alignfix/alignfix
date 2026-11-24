@@ -15,40 +15,50 @@
  */
 
 import { initPyodide } from "../../pyodide.js";
-import { writeFileInChunks } from './utils.js';
+import { writeFileInChunks, wasmOutput } from './utils.js';
 import { safeSyncfs } from "./storage.js";
-import { nextFrame } from "../../ui/utils.js";
+import { stage, report, yieldToUI } from "../../ui/activity.js";
 
-export async function importScoresFromFile(project_id, scores) {
+/**
+ * Import one score per line (in corpus order). Throws an Error with a message
+ * for the user if a line is not a number or the count does not match.
+ * Returns the number of imported scores.
+ */
+export async function importScoresFromFile(project_id, lines) {
   const pyodide = await initPyodide();
-
-  console.log("Importing scores for project:", project_id);
-
   pyodide.globals.set("project_id", project_id);
-  pyodide.globals.set("scores", scores);
+  pyodide.globals.set("score_lines", pyodide.toPy(lines));
 
-  await pyodide.runPythonAsync(`
-    from scores import import_scores_from_file
-    import_scores_from_file(project_id, scores)
-  `);
-
+  let count;
+  try {
+    count = await pyodide.runPythonAsync(`
+      from scores import import_scores_from_file
+      import_scores_from_file(project_id, score_lines)
+    `);
+  } catch (err) {
+    // show the Python message (e.g. "3 line(s) are not numbers ...") without the traceback
+    const lines = String(err.message || err).trim().split("\n");
+    throw new Error(lines[lines.length - 1].replace(/^ValueError: /, ""));
+  } finally {
+    pyodide.globals.delete("score_lines");
+  }
+  report(0.9, "writing to browser storage");
   await safeSyncfs(pyodide);
-
-  return;
+  console.log(`Imported ${count.toLocaleString()} scores for project ${project_id}`);
+  return count;
 }
 
 export async function assignAutoScores(project_id) {
   const pyodide = await initPyodide();
 
-  console.log("Assigning automatic scores for project:", project_id);
-
   pyodide.globals.set("project_id", project_id);
 
-  await pyodide.runPythonAsync(`
+  await stage(0, 0.95, "", () => pyodide.runPythonAsync(`
     from scores import assign_auto_scores
-    assign_auto_scores(project_id)
-  `);
+    await assign_auto_scores(project_id)
+  `));
 
+  report(undefined, "writing to browser storage");
   await safeSyncfs(pyodide);
   return;
 }
@@ -56,15 +66,14 @@ export async function assignAutoScores(project_id) {
 export async function assignConsistencyScores(project_id) {
   const pyodide = await initPyodide();
 
-  console.log("Assigning alignment consistency scores for project:", project_id);
-
   pyodide.globals.set("project_id", project_id);
 
-  await pyodide.runPythonAsync(`
+  await stage(0, 0.95, "", () => pyodide.runPythonAsync(`
     from scores import assign_consistency_scores
-    assign_consistency_scores(project_id)
-  `);
+    await assign_consistency_scores(project_id)
+  `));
 
+  report(undefined, "writing to browser storage");
   await safeSyncfs(pyodide);
   return;
 }
@@ -91,21 +100,19 @@ async function computeStabilityScores(project_id, numCores) {
   const pyodide = await initPyodide(); 
   pyodide.globals.set("project_id", project_id);
 
-  const result = await pyodide.runPythonAsync(`
+  const [src_lines, tgt_lines, align_lines] = await stage(0, 0.2, "Loading sentences", () => pyodide.runPythonAsync(`
       from projects import get_alignments
       src_lines, tgt_lines, align_lines, score_lines = get_alignments(project_id)
       (src_lines, tgt_lines, align_lines, score_lines)
-    `);
+    `));
 
-  const [src_lines, tgt_lines, align_lines, score_lines] = result;
-
-  console.log('operation:Initializing WASM alignment scoring module');
-  const { createModule, config } = await window.WasmModuleLoader.loadAlignmentScore();
-  const poolSize = Math.min(config.poolSize, numCores);
-  const module = await createModule({ 
-    pthreadPoolSize: poolSize
+  const { module, poolSize } = await stage(0.2, 0.3, "Loading scoring module", async () => {
+    const { createModule, config } = await window.WasmModuleLoader.loadAlignmentScore();
+    const poolSize = Math.min(config.poolSize, numCores);
+    const module = await createModule({ pthreadPoolSize: poolSize, ...wasmOutput("alignment_score") });
+    return { module, poolSize };
   });
-  console.log(`✅ Alignment scoring module loaded (${poolSize} threads)`);
+  report(0.3, "scoring sentences");
 
   // File paths for WASM processing
   const srcFilename = "/src.txt";
@@ -114,15 +121,11 @@ async function computeStabilityScores(project_id, numCores) {
   const scoreFilename = "/scores.txt";  
 
   // Write all data to virtual filesystem in chunks to avoid memory issues
-  console.log(`📁 Writing ${src_lines.length} lines to WASM filesystem in chunks...`);
   writeFileInChunks(module, srcFilename, src_lines);
   writeFileInChunks(module, tgtFilename, tgt_lines);
   writeFileInChunks(module, alignFilename, align_lines);
-  
-  console.log(`📁 All files written to WASM filesystem`);
-  
-  // Allow UI to update after file writing
-  await nextFrame();
+  report(0.4);
+  await yieldToUI();
 
   const start_idx = 0;
   const end_idx = src_lines.length;
@@ -152,7 +155,8 @@ async function computeStabilityScores(project_id, numCores) {
   const scores = lines
     .map(line => parseFloat(line));
 
-  console.log(`Parsed ${scores.length} scores`);
+  console.log(`Computed ${scores.length.toLocaleString()} stability scores (${poolSize} threads)`);
+  report(1);
 
   return scores;
 
@@ -161,8 +165,6 @@ async function computeStabilityScores(project_id, numCores) {
 
 async function saveScores(project_id, scores) {
   const pyodide = await initPyodide();
-
-  console.log("Saving stability scores for project:", project_id);
 
   pyodide.globals.set("project_id", project_id);
   pyodide.globals.set("scores", scores);  // Pass as a JavaScript object, not stringified
@@ -179,16 +181,14 @@ async function saveScores(project_id, scores) {
 
 export async function assignStabilityScores(project_id) {
   const numCores = navigator.hardwareConcurrency || 4;
-  const scores = await computeStabilityScores(project_id, numCores);
-  await saveScores(project_id, scores);
+  const scores = await stage(0, 0.8, "", () => computeStabilityScores(project_id, numCores));
+  await stage(0.8, 1, "Saving scores", () => saveScores(project_id, scores));
   return;
 }
 
 
 export async function getScores(project_id) {
   const pyodide = await initPyodide();
-
-  console.log("Fetching scores for project:", project_id);
 
   pyodide.globals.set("project_id", project_id);
 

@@ -14,17 +14,23 @@
  * limitations under the License.
  */
 
+import { stage, report } from "./ui/activity.js";
+
 let pyodide;
 
-async function loadPythonFile(path) {
+async function fetchText(path) {
     const response = await fetch(path);
-    const code = await response.text();
+    if (!response.ok) throw new Error(`Could not load ${path} (HTTP ${response.status})`);
+    return response.text();
+}
+
+async function loadPythonFile(path) {
+    const code = await fetchText(path);
     await pyodide.runPythonAsync(code);
 }
 
 async function loadPythonModule(path, moduleName) {
-    const response = await fetch(path);
-    const code = await response.text();
+    const code = await fetchText(path);
     // write file into Pyodide FS
     pyodide.FS.writeFile(`/${moduleName}.py`, code);
     // append FS to Python path
@@ -49,48 +55,60 @@ export function initPyodide() {
     return initPromise;
 }
 
+const PYTHON_MODULES = [
+    'db', 'progress', 'projects', 'alignment', 'phrases', 'scores', 'lexicon',
+    'text', 'fixes', 'utils', 'binary',
+];
+
 async function _initPyodide() {
     if (!pyodide) {
-        pyodide = await loadPyodide();
-        console.log("Pyodide loaded");
-        await pyodide.loadPackage('micropip');
-        await pyodide.runPythonAsync(`
-            import micropip
-            await micropip.install('sqlite3')
-            await micropip.install('numpy')
-            await micropip.install('bs4')
-        `);
-        console.log("sqlite3 loaded");
-
-        // mount IDBFS for persistence
-        pyodide.FS.mkdir("/data");   // create /data dir
-        pyodide.FS.mount(pyodide.FS.filesystems.IDBFS, {}, "/data");
-
-        // sync from IndexedDB → memory
-        await new Promise((resolve, reject) => {
-            pyodide.FS.syncfs(true, err => err ? reject(err) : resolve());
+        await stage(0, 0.5, "Loading the Python runtime", async () => {
+            pyodide = await loadPyodide({
+                // print() output goes to the log panel (stderr as warnings)
+                stdout: (line) => console.log(line),
+                stderr: (line) => console.warn(line),
+            });
         });
-        console.log("Synced DB from IndexedDB");
+        console.log("Pyodide loaded");
 
+        await stage(0.5, 0.85, "Installing packages", async () => {
+            await pyodide.loadPackage('micropip');
+            const packages = ['sqlite3', 'numpy', 'bs4'];
+            const micropip = pyodide.pyimport('micropip');
+            for (const [i, name] of packages.entries()) {
+                report(i / packages.length, name);
+                await micropip.install(name);
+            }
+            micropip.destroy();
+        });
+        console.log("Python packages loaded");
 
-        await loadPythonFile('backend/py/db_init.py');
-        console.log("Database initialized");
+        await stage(0.85, 0.9, "Opening the database", async () => {
+            // mount IDBFS for persistence
+            pyodide.FS.mkdir("/data");   // create /data dir
+            pyodide.FS.mount(pyodide.FS.filesystems.IDBFS, {}, "/data");
 
-        await loadPythonModule('backend/py/db.py', 'db');
-        await loadPythonModule('backend/py/projects.py', 'projects');
-        await loadPythonModule('backend/py/alignment.py', 'alignment');
-        await loadPythonModule('backend/py/phrases.py', 'phrases');
-        await loadPythonModule('backend/py/scores.py', 'scores');
-        await loadPythonModule('backend/py/lexicon.py', 'lexicon');
-        await loadPythonModule('backend/py/text.py', 'text');
-        await loadPythonModule('backend/py/fixes.py', 'fixes');
-        await loadPythonModule('backend/py/utils.py', 'utils');
-        await loadPythonModule('backend/py/binary.py', 'binary');
-        // module files were written after the import system may have cached "/"
-        await pyodide.runPythonAsync(`
+            // sync from IndexedDB → memory
+            await new Promise((resolve, reject) => {
+                pyodide.FS.syncfs(true, err => err ? reject(err) : resolve());
+            });
+            console.log("Synced DB from IndexedDB");
+
+            await loadPythonFile('backend/py/db_init.py');
+            console.log("Database initialized");
+        });
+
+        await stage(0.9, 1, "Loading modules", async () => {
+            for (const [i, name] of PYTHON_MODULES.entries()) {
+                report(i / PYTHON_MODULES.length, name);
+                await loadPythonModule(`backend/py/${name}.py`, name);
+            }
+            // module files were written after the import system may have cached "/"
+            await pyodide.runPythonAsync(`
     import importlib
     importlib.invalidate_caches()
-        `);
+            `);
+        });
         console.log("Python modules loaded");
     }
 
