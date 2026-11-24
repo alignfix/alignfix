@@ -84,6 +84,7 @@ export async function renderProject(id, params = new URLSearchParams()) {
   </div>
   <div class="row">
     <div class="col-12 col-md-6 col-lg-4">
+      <h2 class="section-title">Phrase pairs <span>most frequent first; click a phrase to search</span></h2>
       <table id="phrases-table" class="display" style="width:100%">
         <thead>
           <tr>
@@ -121,8 +122,8 @@ export async function renderProject(id, params = new URLSearchParams()) {
                   <i class="fas fa-file-import me-1"></i>Import Fixes
                 </label>
                 <input class="form-control form-control-sm" type="file" id="fixes-file-input" 
-                       name="file" accept=".json">
-                <div class="form-text">Upload a JSON file with fix definitions</div>
+                       name="file" accept=".json,application/json">
+                <div class="form-text">A JSON list of edits, e.g. downloaded on the History page of another project</div>
               </div>
             </div>
           </div>
@@ -178,6 +179,7 @@ export async function renderProject(id, params = new URLSearchParams()) {
       </div>
     </div>
     <div class="col-12 col-md-6 col-lg-8">
+      <h2 class="section-title">Sentence pairs <span>matches of the search highlighted; click a sentence to edit it</span></h2>
       <table id="translations-table" class="display" style="width:100%">
         <thead>
           <tr>
@@ -551,19 +553,41 @@ export async function renderProject(id, params = new URLSearchParams()) {
             return;
           }
 
-          // Add each entry to the global fixes array
-          importedFixes.forEach(entry => {
-            fixes.push(entry);
-          });
+          // keep valid fixes and augmentations (as written by History → Download);
+          // deletions are applied right away on this page, so they are skipped
+          let added = 0, skipped = 0;
+          for (const entry of importedFixes) {
+            const type = entry?.type || "fix";
+            const str = (v) => (typeof v === "string" ? v : "");
+            const fix = {
+              src_phrase: str(entry?.src_phrase), tgt_phrase: str(entry?.tgt_phrase),
+              src_fix: str(entry?.src_fix) || str(entry?.src_phrase),
+              tgt_fix: str(entry?.tgt_fix) || str(entry?.tgt_phrase),
+              direction: String(entry?.direction ?? "0"),
+              percentage: String(entry?.percentage ?? "100"),
+              type,
+            };
+            if (!["fix", "augment"].includes(type) || (!fix.src_phrase && !fix.tgt_phrase) ||
+                (fix.src_fix === fix.src_phrase && fix.tgt_fix === fix.tgt_phrase)) {
+              skipped++;
+              continue;
+            }
+            const same = fixes.find(f => f.src_phrase === fix.src_phrase && f.tgt_phrase === fix.tgt_phrase &&
+              String(f.direction) === fix.direction && f.type === fix.type);
+            if (same) Object.assign(same, fix); else fixes.push(fix);
+            added++;
+          }
 
           updateFixesList();
-          toast(`Imported ${importedFixes.length} fix(es); apply them with “Apply edits”.`, "success");
+          toast(`Imported ${added} edit(s)` + (skipped ? `, skipped ${skipped} (deletions or no change)` : "") +
+            "; apply them with “Apply edits”.", added ? "success" : "warning");
         } catch (error) {
           console.error("Error parsing JSON:", error);
           await showAlert("Failed to parse the JSON file. Please ensure the file contains valid JSON.", "Import Error", "danger");
         }
       };
       reader.readAsText(file);
+      event.target.value = "";   // so the same file can be imported again
     }
   });
   

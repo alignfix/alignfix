@@ -436,12 +436,16 @@ export async function renderScores(projectId) {
       }
 
       // Convert pyodide objects to plain JavaScript
+      const field = (m, key) => (m.get ? m.get(key) : m[key]);
       const binnedObjects = binned.map(m => ({
-        bin: m.get ? m.get('bin') : m.bin,
-        count: m.get ? m.get('count') : m.count
+        bin: field(m, 'bin'),
+        end: field(m, 'end'),
+        count: field(m, 'count'),
       }));
 
-      const labels = binnedObjects.map(b => b.bin);
+      const labels = binnedObjects.map(b => b.bin === b.end
+        ? Number(b.bin).toFixed(2)
+        : `${Number(b.bin).toFixed(2)}–${Number(b.end).toFixed(2)}`);
       const data = binnedObjects.map(b => b.count);
 
       // Destroy existing chart
@@ -453,11 +457,10 @@ export async function renderScores(projectId) {
         data: {
           labels,
           datasets: [{
-            label: 'Score Distribution',
+            label: 'Sentence pairs',
             data,
-            backgroundColor: 'rgba(54, 162, 235, 0.6)',
-            borderColor: 'rgba(54, 162, 235, 1)',
-            borderWidth: 1
+            backgroundColor: '#8fb3e0',
+            borderRadius: 3
           }]
         },
         options: {
@@ -465,30 +468,28 @@ export async function renderScores(projectId) {
           maintainAspectRatio: false,
           scales: {
             x: { 
-              title: { display: true, text: 'Score Bins' },
+              title: { display: true, text: 'Score' },
+              grid: { display: false },
               ticks: {
-                callback: function(value, index, ticks) {
-                  const label = this.getLabelForValue(value);
-                  const num = parseFloat(label);
-                  return isNaN(num) ? label : num.toFixed(2);
+                // the start of each range is enough on the axis
+                callback: function(value) {
+                  return String(this.getLabelForValue(value)).split('–')[0];
                 }
               }
             },
-            y: { 
-              title: { display: true, text: 'Frequency' }, 
-              beginAtZero: true 
+            y: {
+              title: { display: true, text: 'Sentence pairs' },
+              beginAtZero: true,
+              ticks: { precision: 0 }
             }
           },
+          animation: false,
           plugins: {
-            legend: {
-              display: true,
-              position: 'top'
-            },
+            legend: { display: false },
             tooltip: {
               callbacks: {
-                label: function(context) {
-                  return `Count: ${context.parsed.y}`;
-                }
+                title: (items) => `Score ${items[0].label}`,
+                label: (context) => `${context.parsed.y.toLocaleString()} sentence pairs`
               }
             }
           }
@@ -499,7 +500,7 @@ export async function renderScores(projectId) {
       console.error('Error plotting histogram:', error);
       document.getElementById('histogram-container').innerHTML = `
         <div class="alert alert-danger">
-          Error loading histogram: ${error.message}
+          Error loading histogram: ${escapeHtml(error.message)}
         </div>
       `;
     }

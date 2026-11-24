@@ -205,25 +205,21 @@ def bin_scores(scores, bin_count=20):
     
     min_score = min(scores)
     max_score = max(scores)
+    if max_score == min_score:
+        # all scores equal: one bin (a zero bin width would label every bin the same)
+        return [{"bin": min_score, "end": max_score, "count": len(scores)}]
     bin_size = (max_score - min_score) / bin_count
 
     bins = [0] * bin_count
 
     for score in scores:
-        if score == max_score:
-            bin_index = bin_count - 1
-        else:
-            bin_index = int((score - min_score) / bin_size)
+        bin_index = min(bin_count - 1, int((score - min_score) / bin_size))
         bins[bin_index] += 1
 
-    binned_scores = [
-        {
-            "bin": min_score + i * bin_size, 
-            "count": count
-        } for i, count in enumerate(bins)
+    return [
+        {"bin": min_score + i * bin_size, "end": min_score + (i + 1) * bin_size, "count": count}
+        for i, count in enumerate(bins)
     ]
-
-    return binned_scores
 
 def save_scores(project_id, scores):
     # scores come from get_alignments() order (see backend/js/scores.js)

@@ -15,15 +15,23 @@
  */
 
 import { getFixes } from "../backend/js/fixes.js";
-import { escapeHtml } from "./utils.js";
+import { escapeHtml, parseDbDate, formatCount } from "./utils.js";
+import { downloadBlob, safeFilename } from "../backend/js/utils.js";
+import { getProject } from "../backend/js/projects.js";
 
-/**
- * renderHistory(projectId)
- * - Renders a history page showing all fixes for the given project
- */
+const TYPES = {
+  fix: { label: "Fix", badge: "text-bg-primary", icon: "fa-pen" },
+  augment: { label: "Augment", badge: "text-bg-success", icon: "fa-clone" },
+  delete: { label: "Delete", badge: "text-bg-danger", icon: "fa-trash" },
+};
+
+const DIRECTION = { "0": "↔", "1": "→", "-1": "←" };
+
+/** History page: the edits applied to a project, newest first. */
 export async function renderHistory(projectId) {
   const app = document.getElementById('app') || document.body;
-  app.innerHTML = `<div class="container py-3"><div class="text-center">Loading...</div></div>`;
+  renderSidebar();
+  app.innerHTML = `<div class="text-center text-muted py-5"><span class="spinner-border spinner-border-sm me-2"></span>Loading…</div>`;
 
   let fixesHistory;
   try {
@@ -32,124 +40,121 @@ export async function renderHistory(projectId) {
     app.innerHTML = `<div class="alert alert-danger">Failed to load history: ${escapeHtml(e.message)}</div>`;
     return;
   }
+  const entries = [...fixesHistory].reverse();   // newest first
+  const counts = entries.reduce((acc, e) => { const t = e.type || "fix"; acc[t] = (acc[t] || 0) + 1; return acc; }, {});
 
   app.innerHTML = `
-    <div>
-      <div class="row">
-        <div class="col-12">
-          <div class="page-header">
-            <h1 class="page-title">History</h1>
-            <span class="badge text-bg-secondary">${fixesHistory.length} applied</span>
-          </div>
-        </div>
-        
-        <div class="col-12">
-          <div id="stored-history" class="accordion">
-            <div class="accordion-item">
-              <h2 class="accordion-header" id="headingHistory">
-                <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#collapseHistory"
-                  aria-expanded="true" aria-controls="collapseHistory">
-                  <i class="fas fa-list me-2"></i>
-                  Applied Fixes (${fixesHistory.length})
-                </button>
-              </h2>
-              <div id="collapseHistory" class="accordion-collapse collapse show" aria-labelledby="headingHistory"
-                data-bs-parent="#stored-history">
-                <div class="accordion-body">
-                  <div id="history-list" class="list-group list-group-flush">
-                    <!-- History items will be populated here -->
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">History</h1>
+        <div class="text-muted small">${entries.length
+          ? Object.entries(counts).map(([t, n]) => `${formatCount(n)} ${(TYPES[t]?.label || t).toLowerCase()}${n === 1 ? "" : "s"}`).join(" · ")
+          : "No edits applied yet"}</div>
       </div>
+      ${entries.length ? `
+      <div class="d-flex gap-2">
+        <div class="input-group" style="width: 16rem">
+          <span class="input-group-text"><i class="fas fa-search"></i></span>
+          <input type="search" class="form-control" id="history-search" placeholder="Filter by phrase" aria-label="Filter by phrase">
+        </div>
+        <button class="btn btn-outline-secondary text-nowrap" id="history-download" title="The edits as JSON; it can be imported as pending edits on the Phrases page of another project">
+          <i class="fas fa-download me-1"></i>Download</button>
+      </div>` : ""}
     </div>
+    ${entries.length ? `
+    <div class="card">
+      <div class="table-responsive">
+        <table class="table align-middle mb-0 history-table">
+          <thead>
+            <tr>
+              <th scope="col">#</th>
+              <th scope="col">Edit</th>
+              <th scope="col">Original</th>
+              <th scope="col">Changed to</th>
+              <th scope="col" class="text-end">Sentences</th>
+              <th scope="col" class="text-end">When</th>
+            </tr>
+          </thead>
+          <tbody id="history-rows">${entries.map((e, i) => row(e, entries.length - i)).join("")}</tbody>
+        </table>
+      </div>
+      <div class="card-footer small text-muted" id="history-info">${editCount(entries.length)}</div>
+    </div>` : `
+    <div class="card"><div class="card-body empty-state">
+      <i class="fas fa-history"></i>
+      <h5>Nothing applied yet</h5>
+      <p class="mb-0">Edits added on the <a href="#project-${encodeURIComponent(projectId)}">Phrases</a> page are listed here once applied.</p>
+    </div></div>`}
   `;
 
-  // Populate the history list
-  const historyList = document.getElementById("history-list");
-  
-  if (fixesHistory.length === 0) {
-    historyList.innerHTML = `
-      <div class="text-center text-muted py-4">
-        <i class="fas fa-history fa-3x mb-3"></i>
-        <p>No fixes have been applied yet.</p>
-      </div>
-    `;
-  } else {
-    fixesHistory.forEach((entry, index) => {
-      const fix1 = entry.src_fix ? entry.src_fix : entry.src_phrase;
-      const fix2 = entry.tgt_fix ? entry.tgt_fix : entry.tgt_phrase;
-      const fixType = entry.type || 'fix';
-      
-      let typeBadge, actionLabel, changeDisplay;
-      
-      if (fixType === 'delete') {
-        typeBadge = '<span class="badge bg-danger ms-2"><i class="fas fa-trash me-1"></i>Delete</span>';
-        actionLabel = 'Deleted phrases:';
-        changeDisplay = '';
-      } else if (fixType === 'augment') {
-        typeBadge = '<span class="badge bg-success ms-2">Augment</span>';
-        actionLabel = 'Augmented to:';
-        changeDisplay = `
-          <div class="d-flex w-100 justify-content-between">
-            <h6 class="mb-1">
-              <span class="text-muted">${actionLabel}</span>
-              <code class="bg-warning text-black px-2 py-1 rounded">${escapeHtml(fix1)}</code> 
-              ↔
-              <code class="bg-warning text-black px-2 py-1 rounded">${escapeHtml(fix2)}</code>
-            </h6>
-            <div class="text-end">
-               <span class="badge bg-secondary mt-1">${entry.percentage || 100}%</span>
-            </div>
-          </div>
-        `;
-      } else {
-        typeBadge = '<span class="badge bg-primary ms-2">Fix</span>';
-        actionLabel = 'Fixed to:';
-        changeDisplay = `
-          <div class="d-flex w-100 justify-content-between">
-            <h6 class="mb-1">
-              <span class="text-muted">${actionLabel}</span>
-              <code class="bg-warning text-black px-2 py-1 rounded">${escapeHtml(fix1)}</code> 
-              ↔
-              <code class="bg-warning text-black px-2 py-1 rounded">${escapeHtml(fix2)}</code>
-            </h6>
-            <div class="text-end">
-               <span class="badge bg-secondary mt-1">${entry.percentage || 100}%</span>
-            </div>
-          </div>
-        `;
-      }
-      
-      const item = document.createElement("div");
-      item.className = "list-group-item list-group-item-action";
-      item.innerHTML = `
-        <div class="mb-2 d-flex w-100 justify-content-between">
-          <h6 class="mb-1">${typeBadge} #${index + 1}</h6>
-          <div class="text-end">
-            <small class="text-muted d-block">
-              ${entry.created_at || 'Unknown time'}
-            </small>
-          </div>
-        </div>
-        <div class="d-flex w-100 justify-content-between">
-          <h6 class="mb-1"><span class="text-muted">${fixType === 'delete' ? 'Deleted phrases:' : 'Original:'}</span>
-          <code class="bg-light px-2 py-1 rounded">${escapeHtml(entry.src_phrase)}</code> 
-          ↔ 
-          <code class="bg-light px-2 py-1 rounded">${escapeHtml(entry.tgt_phrase)}</code>     
-          </h6>
-          <div class="text-end">
-            <span class="badge ${fixType === 'delete' ? 'bg-danger' : 'bg-primary'} mt-1">
-              ${fixType === 'delete' ? `${entry.num_occurrences || 1} sentences deleted` : `${entry.num_occurrences || 1} occurrences`}
-            </span>
-          </div>
-        </div>
-        ${changeDisplay}
-      `;
-      historyList.appendChild(item);
+  if (!entries.length) return;
+
+  document.getElementById("history-search").addEventListener("input", (ev) => {
+    const needle = ev.target.value.trim().toLowerCase();
+    let shown = 0;
+    document.querySelectorAll("#history-rows tr").forEach(tr => {
+      const match = !needle || tr.dataset.text.includes(needle);
+      tr.hidden = !match;
+      if (match) shown++;
     });
-  }
+    document.getElementById("history-info").textContent = needle
+      ? `${formatCount(shown)} of ${editCount(entries.length)}` : editCount(entries.length);
+  });
+
+  document.getElementById("history-download").addEventListener("click", async () => {
+    const project = await getProject(projectId).catch(() => null);
+    const data = fixesHistory.map(({ src_phrase, src_fix, tgt_phrase, tgt_fix, direction, percentage, type }) =>
+      ({ src_phrase, src_fix, tgt_phrase, tgt_fix, direction, percentage, type }));
+    downloadBlob(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }),
+      `${safeFilename(project?.name, `project_${projectId}`)}_edits.json`);
+  });
+}
+
+const editCount = (n) => `${formatCount(n)} edit${n === 1 ? "" : "s"}`;
+
+function pair(a, b, direction, cls = "") {
+  return `<span class="phrase ${cls}">${escapeHtml(a || "")}</span>
+    <span class="text-muted mx-1">${DIRECTION[String(direction)] || "↔"}</span>
+    <span class="phrase ${cls}">${escapeHtml(b || "")}</span>`;
+}
+
+function row(entry, number) {
+  const type = entry.type || "fix";
+  const t = TYPES[type] || { label: type, badge: "text-bg-secondary", icon: "fa-pen" };
+  const fix1 = entry.src_fix || entry.src_phrase;
+  const fix2 = entry.tgt_fix || entry.tgt_phrase;
+  const when = parseDbDate(entry.created_at);
+  const changed = type === "delete"
+    ? '<span class="text-muted fst-italic">sentences deleted</span>'
+    : pair(fix1, fix2, entry.direction, "phrase-new");
+  const share = type !== "delete" && entry.percentage != null && Number(entry.percentage) < 100
+    ? ` <span class="badge text-bg-light" title="share of the occurrences changed">${escapeHtml(String(entry.percentage))}%</span>` : "";
+  const text = [entry.src_phrase, entry.tgt_phrase, fix1, fix2].join(" ").toLowerCase();
+  return `
+    <tr data-text="${escapeHtml(text)}">
+      <td class="text-muted tabular">${number}</td>
+      <td><span class="badge ${t.badge}"><i class="fas ${t.icon} me-1"></i>${escapeHtml(t.label)}</span>${share}</td>
+      <td>${pair(entry.src_phrase, entry.tgt_phrase, entry.direction)}</td>
+      <td>${changed}</td>
+      <td class="text-end tabular">${formatCount(entry.num_occurrences || 0)}</td>
+      <td class="text-end small text-muted text-nowrap" title="${escapeHtml(when ? when.toLocaleString() : "")}">${escapeHtml(when ? when.toLocaleDateString() + " " + when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "–")}</td>
+    </tr>`;
+}
+
+function renderSidebar() {
+  const sidebar = document.getElementById("sidebar-content");
+  if (!sidebar) return;
+  sidebar.innerHTML = `
+    <div class="p-3">
+      <h5 class="mb-3"><i class="fas fa-history text-primary me-2"></i>History</h5>
+      <p class="small">Every edit applied to this project, newest first:</p>
+      <ul class="small">
+        <li><strong>Fix</strong> replaces a phrase pair in the sentences that contain it
+          (in the share of them given in %).</li>
+        <li><strong>Augment</strong> adds copies of those sentences with the phrase pair replaced.</li>
+        <li><strong>Delete</strong> removes the sentences containing the pair.</li>
+      </ul>
+      <p class="small mb-0"><strong>Download</strong> saves the edits as JSON. Importing that file on the
+        Phrases page of another project queues the same edits there.</p>
+    </div>`;
 }
