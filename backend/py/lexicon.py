@@ -9,9 +9,8 @@ For every word w on either side we estimate an *outcome distribution*:
 
 where r(w) is the (smoothed) rate at which w is aligned at all, and p(t | w)
 the relative frequency of aligned partners t. The entropy H(O(w)) says how
-predictable the translation of w is (used for translation difficulty), and
-the surprisal of what a sentence actually contains, compared with H(O(w)),
-says how *unexpected* it is (used for alignment consistency).
+predictable the translation of w is (used for translation clarity). Translation
+issues (alignment consistency, Review page) are found by issues.py.
 """
 import math
 from collections import Counter, defaultdict
@@ -154,74 +153,3 @@ class Lexicon:
         lex.src.finalize(min_support)
         lex.tgt.finalize(min_support)
         return lex
-
-
-def _binary_entropy(r):
-    return _entropy([r, 1 - r])
-
-
-def _side_anomalies(side, tokens, partner_present, aligned, side_name):
-    """
-    Per-token anomalies for one side, in nats above what is typical for the word:
-
-    - unaligned: w is left unaligned although it is usually aligned
-          -log(1 - r) - H_b(r)
-    - missing:   none of w's usual translations occurs anywhere in the other
-                 side (independent of the alignment, so it also catches words
-                 force-aligned to the wrong partner)
-          -log((1 - r) + r * q) - H(O(w)),  q = Σ p(t|w) over t present
-    """
-    flagged = []
-    for i, tok in enumerate(tokens):
-        if not is_content(tok):
-            continue
-        w = normalize(tok)
-        if not side.supported(w):
-            continue
-
-        r = side.rate[w]
-        unaligned = 0.0
-        if i not in aligned:
-            unaligned = -math.log(1 - r) - _binary_entropy(r)
-
-        missing = 0.0
-        translations = side.translations[w]
-        if translations:
-            if len(translations) <= len(partner_present):
-                q = sum(p for t, p in translations.items() if t in partner_present)
-            else:
-                q = sum(translations.get(t, 0.0) for t in partner_present)
-            consistent = (1 - r) + r * min(q, 1.0)
-            n = side.count[w]
-            missing = -math.log(max(consistent, 1.0 / (n + 2))) - side.entropy[w]
-
-        anomaly = max(unaligned, missing)
-        if anomaly > 0:
-            flagged.append({
-                "side": side_name,
-                "index": i,
-                "token": tok,
-                "kind": "unaligned" if unaligned >= missing else "missing",
-                "anomaly": round(anomaly, 3),
-            })
-    return flagged
-
-
-def consistency_anomalies(lex, line1, line2, alignment):
-    """All anomalous tokens of a sentence pair, most anomalous first."""
-    src = line1.split()
-    tgt = line2.split()
-    links = _parse_links(alignment, len(src), len(tgt))
-    src_present = {normalize(t) for t in src if is_content(t)}
-    tgt_present = {normalize(t) for t in tgt if is_content(t)}
-
-    flagged = _side_anomalies(lex.src, src, tgt_present, {s for s, _ in links}, "src")
-    flagged += _side_anomalies(lex.tgt, tgt, src_present, {t for _, t in links}, "tgt")
-    flagged.sort(key=lambda f: f["anomaly"], reverse=True)
-    return flagged
-
-
-def consistency_score(flagged):
-    """1 = nothing unexpected; decreases with the largest token anomaly A: 1 / (1 + A)."""
-    worst = flagged[0]["anomaly"] if flagged else 0.0
-    return 1.0 / (1.0 + worst)

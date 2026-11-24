@@ -69,7 +69,7 @@ export async function renderScores(projectId) {
                 </button>
                 <button id="assign-consistency-scores-btn" class="list-group-item list-group-item-action" data-busy="icon">
                   <i class="fas fa-magnifying-glass"></i>
-                  <span><strong>Alignment consistency</strong><small>Words that behave unlike elsewhere in the corpus</small></span>
+                  <span><strong>Alignment consistency</strong><small>Likely translation errors, as on the Review page</small></span>
                 </button>
               </div>
 
@@ -281,35 +281,39 @@ export async function renderScores(projectId) {
                 <!-- Alignment Consistency Tab -->
                 <div class="tab-pane fade" id="consistency" role="tabpanel">
                   <h5>Alignment Consistency</h5>
-                  <p>This metric flags sentence pairs containing words that <strong>behave unlike they usually do in the corpus</strong>:
-                    possible omissions, mistranslations or hallucinated additions. Low scores are worth reviewing.</p>
+                  <p>This metric flags sentence pairs with <strong>likely translation errors</strong>: omissions, mistranslations,
+                    hallucinated additions and pairs that do not belong together. Words that are simply translated in several
+                    valid ways (synonyms, inflections, paraphrases) are <em>not</em> penalised. Low scores are worth reviewing;
+                    the Review page lists the same issues with explanations.</p>
 
-                  <h6>Checks per word (both sides, words seen at least 20 times):</h6>
+                  <h6>Checks</h6>
                   <ul>
-                    <li><strong>Unexpectedly unaligned:</strong> the word is left unaligned although it is aligned in most other sentences.</li>
-                    <li><strong>Expected translation missing:</strong> none of the word's usual translations occurs anywhere on the other side.
-                      This does not rely on the alignment of the sentence, so it also catches words aligned to the wrong partner.</li>
+                    <li><strong>Usual translation missing:</strong> for every word seen in at least 20 sentences, AlignFix learns its usual
+                      translations from the alignments (linked often in both directions, inflections merged) and how often
+                      at least one of them appears on the other side. A word is flagged when none appears although one nearly always does.
+                      This does not rely on the alignment of the sentence itself.</li>
+                    <li><strong>Numbers</strong> that appear on one side only.</li>
+                    <li><strong>Repetitions</strong> in the target that the source does not have.</li>
+                    <li><strong>Length ratio</strong> far outside what is usual in the corpus.</li>
+                    <li><strong>Copies:</strong> the target is the untranslated source.</li>
                   </ul>
-                  <p class="small">Each check measures how much more surprising the observation is than what is typical for that word,
-                    so ambiguous words (many valid translations) and words that are often legitimately dropped are not flagged.</p>
 
-                  <h6>Formula:</h6>
+                  <h6>Formula</h6>
                   <div class="bg-light p-3 rounded mb-2">
-                    <code>unaligned(w) = −log(1 − r) − H_b(r)</code><br>
-                    <code>missing(w) = −log((1 − r) + r · Σ p(t|w) for t present) − H(w)</code><br>
-                    <code>Consistency(S) = 1 / (1 + max anomaly over the words of S)</code>
+                    <code>surprise(w) = −ln(1 − e(w)) − ln 5</code>, counted when positive<br>
+                    <code>Consistency(S) = 1 / (1 + Σ surprises of the issues of S)</code>
                   </div>
                   <p class="small">
-                    Where <code>r</code> is how often <code>w</code> is aligned at all, <code>p(t|w)</code> the share of its links going to <code>t</code>,
-                    <code>H_b</code> the binary entropy and <code>H(w)</code> the entropy of the word's translations (see Translation Clarity).
-                    Open a sentence pair to see which tokens were flagged.
+                    Where <code>e(w)</code> is the share of the sentences containing <code>w</code> in which a usual translation of
+                    <code>w</code> appears on the other side. A missing translation only counts when <code>e(w)</code> is above 80%.
+                    Open a sentence pair to see its issues.
                   </p>
 
-                  <h6>Score Range:</h6>
+                  <h6>Score range</h6>
                   <div class="d-flex flex-wrap align-items-center gap-2 mt-2">
-                    <span class="badge bg-danger">&lt; 0.2 - Very unexpected</span>
-                    <span class="badge bg-warning">0.2 - 0.5 - Suspicious</span>
-                    <span class="badge bg-success">1.0 - Consistent</span>
+                    <span class="badge bg-danger">&lt; 0.15 – Likely error</span>
+                    <span class="badge bg-warning">0.15 – 0.25 – Worth a look</span>
+                    <span class="badge bg-success">1.0 – Nothing found</span>
                   </div>
                 </div>
               </div>
@@ -683,25 +687,22 @@ export async function renderScores(projectId) {
     try {
       const flagged = await explainConsistency(projectId, id);
       if (flagged === null) {
-        container.innerHTML = '<span class="text-muted">Run <strong>Alignment Consistency</strong> to see unexpected tokens.</span>';
+        container.innerHTML = '<span class="text-muted">Run <strong>Alignment consistency</strong> to see possible translation issues.</span>';
         return;
       }
       if (flagged.length === 0) {
-        container.innerHTML = '<span class="text-success">No unexpected tokens.</span>';
+        container.innerHTML = '<span class="text-success">No translation issues found.</span>';
         return;
       }
-      const labels = { unaligned: "unaligned, usually aligned", missing: "usual translations missing" };
-      container.innerHTML = flagged.map(f =>
-        `<span class="badge bg-${f.anomaly >= 1 ? 'danger' : 'warning text-dark'} me-1 mb-1"
-               title="${f.side === 'src' ? 'Source' : 'Target'} token ${f.index}: ${labels[f.kind]}">
-           ${f.side === 'src' ? 'Source' : 'Target'}: ${escapeHtml(f.token)} · ${labels[f.kind]} · ${f.anomaly.toFixed(2)}
-         </span>`
-      ).join('');
+      container.innerHTML = `<ul class="list-unstyled mb-0 small">${flagged.map(f =>
+        `<li class="mb-1"><i class="fas fa-circle-exclamation me-1 text-${f.anomaly >= 1 ? 'danger' : 'warning'}"></i>${escapeHtml(f.text)}</li>`
+      ).join('')}</ul>`;
       for (const f of flagged) {
+        if (f.index === null || f.index === undefined) continue;
         const el = document.querySelector(`.${f.side}-word[data-idx="${f.index}"]`);
         if (el) {
           el.style.textDecoration = 'underline wavy #dc3545';
-          el.title = labels[f.kind];
+          el.title = f.text;
         }
       }
     } catch (error) {

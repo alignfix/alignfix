@@ -6,7 +6,8 @@ from db import get_db
 from projects import get_alignment_row_ids
 from statistics import median
 
-from lexicon import Lexicon, normalize, is_content, consistency_anomalies, consistency_score
+from lexicon import Lexicon, normalize, is_content
+from issues import IssueModel, sentence_issues, issue_score, describe
 import progress
 
 
@@ -130,37 +131,44 @@ async def assign_auto_scores(project_id):
         write_scores(project_id, scores, row_ids=[row[0] for row in rows])
     return True
 
-# Lexicon of the last consistency run per project, reused to explain single rows.
-_consistency_lexicons = {}
+# Issue model of the last consistency run per project, reused to explain single rows.
+_consistency_models = {}
+
+
+def _explained_issues(found):
+    """issues.sentence_issues output in the shape the Scores page shows."""
+    return [{"side": f["side"], "index": f["index"], "token": f["word"] or f["kind"], "kind": f["kind"],
+             "anomaly": round(f["anomaly"], 3), "text": describe(f)} for f in found]
 
 
 async def assign_consistency_scores(project_id):
     """
-    Alignment consistency: flags sentence pairs containing words that behave
-    unlike they usually do in the corpus - left unaligned although they are
-    usually aligned, or without any of their usual translations on the other
-    side (possible omission, mistranslation or hallucinated addition).
-    1 = consistent, lower = more suspicious; see lexicon.consistency_anomalies.
+    Alignment consistency: 1 / (1 + issue score) per sentence pair, where the
+    issue score sums how surprising its translation issues are (see issues.py):
+    words without any of their usual translations on the other side although
+    they nearly always have one, numbers on one side only, repetitions, unusual
+    length ratios and untranslated copies. 1 = nothing found, lower = more
+    suspicious. Synonyms and paraphrased words are not penalised.
     """
     with progress.stage(0.0, 0.05, "Loading sentences"):
         rows = get_active_rows(project_id)
-    lex = await progress.drive(
-        Lexicon.build_steps((line1, line2, align) for _, line1, line2, align in rows),
-        0.05, 0.5, "Collecting translation statistics")
-    _consistency_lexicons[project_id] = lex
+    model = await progress.drive(
+        IssueModel.build_steps((line1, line2, align) for _, line1, line2, align in rows),
+        0.05, 0.5, "Learning the usual translations")
+    _consistency_models[project_id] = model
 
     print(f"Calculating alignment consistency for {len(rows)} alignments.")
 
     scores = []
     flagged_rows = 0
     with progress.stage(0.5, 0.95, "Checking sentences"):
-        for i, (_, line1, line2, align) in enumerate(rows):
+        for i, (_, line1, line2, _) in enumerate(rows):
             await progress.checkpoint(i / len(rows), f"{i:,} / {len(rows):,}")
-            flagged = consistency_anomalies(lex, line1, line2, align)
-            flagged_rows += bool(flagged)
-            scores.append(round(consistency_score(flagged), 5))
+            found = sentence_issues(model, line1, line2)
+            flagged_rows += bool(found)
+            scores.append(round(1.0 / (1.0 + issue_score(found)), 5))
 
-    print(f"{flagged_rows} of {len(rows)} sentence pairs contain unexpected tokens.")
+    print(f"{flagged_rows} of {len(rows)} sentence pairs have possible translation issues.")
     with progress.stage(0.95, 1.0, "Saving scores"):
         write_scores(project_id, scores, row_ids=[row[0] for row in rows])
     return True
@@ -168,25 +176,25 @@ async def assign_consistency_scores(project_id):
 
 def explain_consistency(project_id, row_id, build=False):
     """
-    Anomalous tokens of one row. Uses the lexicon of the last consistency run in
-    this session; without one, returns None unless build=True (slow on large corpora).
+    Issues of one row. Uses the model of the last consistency run in this
+    session; without one, returns None unless build=True (slow on large corpora).
     """
-    lex = _consistency_lexicons.get(project_id)
-    if lex is None:
+    model = _consistency_models.get(project_id)
+    if model is None:
         if not build:
             return None
         rows = get_active_rows(project_id)
-        lex = Lexicon.build((line1, line2, align) for _, line1, line2, align in rows)
-        _consistency_lexicons[project_id] = lex
+        model = IssueModel.build((line1, line2, align) for _, line1, line2, align in rows)
+        _consistency_models[project_id] = model
 
     _, cursor = get_db()
     cursor.execute(
-        "SELECT line1, line2, alignment FROM alignments WHERE project_id = ? AND row_id = ?",
+        "SELECT line1, line2 FROM alignments WHERE project_id = ? AND row_id = ?",
         (project_id, row_id))
     row = cursor.fetchone()
     if not row:
         return []
-    return consistency_anomalies(lex, *row)
+    return _explained_issues(sentence_issues(model, *row))
 
 
 def get_scores(project_id):
