@@ -45,7 +45,8 @@ static pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
 int parse_alignments(char *line, Alignment *alignments)
 {
     int count = 0;
-    char *token = strtok(line, " \t\n");
+    char *saveptr = NULL;  // strtok_r: strtok's global state is not thread-safe
+    char *token = strtok_r(line, " \t\n", &saveptr);
     while (token && count < MAX_ALIGNMENTS_PER_LINE)
     {
         int s, t;
@@ -55,7 +56,7 @@ int parse_alignments(char *line, Alignment *alignments)
             alignments[count].tgt = t;
             count++;
         }
-        token = strtok(NULL, " \t\n");
+        token = strtok_r(NULL, " \t\n", &saveptr);
     }
     return count;
 }
@@ -172,7 +173,7 @@ typedef struct
     char **src_lines;
     char **tgt_lines;
     char **align_lines;
-    FILE *log_file;
+    float *scores;      // one slot per line, written only by the owning thread
 } ThreadArgs;
 
 pthread_mutex_t print_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -182,13 +183,12 @@ void *worker(void *arg)
 {
     ThreadArgs *args = (ThreadArgs *)arg;
 
-    FILE *log_file = args->log_file;
-
     for (int row_id = args->start_index; row_id < args->end_index; row_id++)
     {
          // Check only pointer types for NULL, not float array elements
         if (!args->src_lines[row_id] || !args->tgt_lines[row_id] || !args->align_lines[row_id]) {
             printf("Warning: Thread %d Missing data at line %d, skipping.\n", args->thread_id, row_id + 1);
+            args->scores[row_id] = 0.0f;
             continue;
         }
         
@@ -214,9 +214,9 @@ void *worker(void *arg)
         // Compute the alignment stability score
         float alignment_score = compute_alignment_stability(alignments, align_count, src_len, tgt_len);
 
-        pthread_mutex_lock(&print_mutex);
-        fprintf(log_file, "%.5f\n", alignment_score);   
-        pthread_mutex_unlock(&print_mutex);
+        // Store by line index; the file is written in order after all threads join.
+        // (Writing directly from the threads interleaved lines in completion order.)
+        args->scores[row_id] = alignment_score;
     }
     return NULL;
 }
@@ -240,8 +240,11 @@ void alignment_score_parallel(
 
     int NUM_THREADS = num_cores; // adjust as needed
 
+    if (NUM_THREADS < 1) NUM_THREADS = 1;
+
     pthread_t* threads = new pthread_t[NUM_THREADS];
     ThreadArgs* args = new ThreadArgs[NUM_THREADS];
+    float* scores = new float[line_count > 0 ? line_count : 1]();
 
     // // Make a safe local copy of the string
     char safe_path[256];
@@ -262,7 +265,7 @@ void alignment_score_parallel(
         args[t].src_lines = src_lines;
         args[t].tgt_lines = tgt_lines;
         args[t].align_lines = align_lines;
-        args[t].log_file = out_file;        // opened once in main
+        args[t].scores = scores;
 
         pthread_create(&threads[t], NULL, worker, &args[t]);
     }
@@ -272,10 +275,14 @@ void alignment_score_parallel(
         pthread_join(threads[t], NULL);
     }
 
-    //printf("Phrase extraction completed with %d threads.\n", NUM_THREADS);
-    
+    for (int i = 0; i < line_count; i++)
+    {
+        fprintf(out_file, "%.5f\n", scores[i]);
+    }
+
     fclose(out_file);
 
+    delete[] scores;
     delete[] threads;
     delete[] args;
 }
