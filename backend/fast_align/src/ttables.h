@@ -79,7 +79,18 @@ class TTable {
   }
 
   inline void Increment(const unsigned e, const unsigned f, const double x) {
-    counts[e].find(f)->second += x; // Ignore race conditions here.
+    // Called concurrently by the EM worker threads. A plain "+=" loses
+    // updates, and in WebAssembly shared memory a racing 8-byte access may
+    // even tear, corrupting the counts (alignments then differed from run to
+    // run). Add atomically with a compare-and-swap loop instead.
+    double* target = &counts[e].find(f)->second;
+    double expected;
+    __atomic_load(target, &expected, __ATOMIC_RELAXED);
+    double desired;
+    do {
+      desired = expected + x;
+    } while (!__atomic_compare_exchange(target, &expected, &desired, true,
+                                        __ATOMIC_RELAXED, __ATOMIC_RELAXED));
   }
 
   void NormalizeVB(const double alpha, size_t num_threads) {
