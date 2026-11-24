@@ -36,11 +36,12 @@ const char *SPLIT_SYMBOLS[] = {
 };
 const int NUM_SPLIT_SYMBOLS = sizeof(SPLIT_SYMBOLS) / sizeof(SPLIT_SYMBOLS[0]);
 
-// Helper: Check if a string is in the split symbols
-int is_split_symbol(const char *str) {
+// Byte length of the split symbol starting at text, or 0 if there is none.
+int split_symbol_at(const char *text) {
     for (int i = 0; i < NUM_SPLIT_SYMBOLS; i++) {
-        if (strcmp(str, SPLIT_SYMBOLS[i]) == 0) {
-            return 1;
+        size_t symbol_len = strlen(SPLIT_SYMBOLS[i]);
+        if (strncmp(text, SPLIT_SYMBOLS[i], symbol_len) == 0) {
+            return (int)symbol_len;
         }
     }
     return 0;
@@ -75,11 +76,13 @@ char* tokenise(const char *text) {
 
     for (size_t i = 0; i < len; i++) {
         char c = text[i];
-        char s[2] = {c, '\0'}; // null-terminated string
-        if (is_split_symbol(s)) {
-            p += sprintf(p, " %s %c %s ", NO_BLANK_TOKEN, c, NO_BLANK_TOKEN); 
-            // worst case: 4 blanks + 2 no blank tokens + symbol
-        } else if (isspace(c)) {
+        int symbol_len = split_symbol_at(text + i);
+        if (symbol_len > 0) {
+            // Multi-byte UTF-8 symbols (€ § « ») are matched whole; checking
+            // single bytes never matched them.
+            p += sprintf(p, " %s %.*s %s ", NO_BLANK_TOKEN, symbol_len, text + i, NO_BLANK_TOKEN);
+            i += symbol_len - 1;
+        } else if (isspace((unsigned char)c)) {
             p += sprintf(p, " %s ", BLANK_TOKEN);
         } else {
             *p++ = c;
@@ -127,8 +130,8 @@ char* tokenise(const char *text) {
             continue;
         }
 
-        // Skip final NB
-        if (i == token_count - 1 && tokens[i] == NO_BLANK_TOKEN)
+        // Skip leading and final NB (the text starts or ends with a symbol)
+        if ((i == 0 || i == token_count - 1) && tokens[i] == NO_BLANK_TOKEN)
             continue;
 
         joined += tokens[i];

@@ -1,6 +1,4 @@
 import html
-import unicodedata
-import ftfy
 import re
 
 from utils import find_all_sublists
@@ -53,11 +51,6 @@ BLANK_TOKEN = "#BLANK"
 SKIP_SYMBOLS = SPLIT_SYMBOLS + [BLANK_TOKEN, NO_BLANK_TOKEN]
 
 
-def clean_text(text):
-    text = ftfy.fix_text(text)
-    clean = unicodedata.normalize("NFKC", text)
-    return clean
-
 def detokenise(text, as_list=False):
     if isinstance(text, list):
         text = " ".join([str(x) for x in text])
@@ -76,17 +69,6 @@ def create_content_search(text):
     words = [w for w in words if w not in SKIP_SYMBOLS]
     return words
 
-def remove_nb_bl_pairs_stack(tokens):
-    stack = []
-
-    for t in tokens:
-        if stack and ((stack[-1], t) in [(NO_BLANK_TOKEN, BLANK_TOKEN), (BLANK_TOKEN, NO_BLANK_TOKEN)]):
-            stack.pop()  # remove previous NB/BL
-        else:
-            stack.append(t)
-
-    return stack
-
 def strip_nb_bl(tokens):
     # if first token is Blank or no blank, strip
     if tokens and (tokens[0] == BLANK_TOKEN or tokens[0] == NO_BLANK_TOKEN):
@@ -98,6 +80,14 @@ def strip_nb_bl(tokens):
 
     return tokens
 
+# Must behave exactly like tokenise() in backend/c/text_tokenize.cc, which
+# tokenizes uploaded corpora: phrases, fixes and edited lines tokenized here are
+# matched against (and inserted into) those stored lines.
+_SPLIT_SET = set(SPLIT_SYMBOLS)
+_WHITESPACE = set(" \t\n\v\f\r")   # C isspace() in the "C" locale
+_C_BLANK = "#BL"                     # the C tokenizer's internal blank marker
+
+
 def tokenise(text, as_string=False):
 
     if isinstance(text, list):
@@ -106,27 +96,40 @@ def tokenise(text, as_string=False):
     if not text.strip():
         return ''
 
-    text = clean_text(text)
+    parts = []
+    for ch in text:
+        if ch in _SPLIT_SET:
+            parts.append(f" {NO_BLANK_TOKEN} {ch} {NO_BLANK_TOKEN} ")
+        elif ch in _WHITESPACE:
+            parts.append(f" {_C_BLANK} ")
+        else:
+            parts.append(ch)
 
-    if text == " ":
-        return NO_BLANK_TOKEN if as_string else [NO_BLANK_TOKEN]
+    tokens = []
+    for token in "".join(parts).split(" "):
+        if not token:
+            continue
+        if tokens:
+            prev = tokens[-1]
+            if token == _C_BLANK and prev == NO_BLANK_TOKEN:
+                tokens[-1] = _C_BLANK      # NB followed by blank becomes a blank
+                continue
+            if token == NO_BLANK_TOKEN and prev in (_C_BLANK, NO_BLANK_TOKEN):
+                continue                   # NB after a blank, or duplicate NB
+        tokens.append(token)
 
-    for sym in SPLIT_SYMBOLS:
-        text = text.replace(sym, f" {NO_BLANK_TOKEN} {sym} {NO_BLANK_TOKEN} ")
+    last = len(tokens) - 1
+    tokens = [
+        t for i, t in enumerate(tokens)
+        if t != _C_BLANK and not ((i == 0 or i == last) and t == NO_BLANK_TOKEN)
+    ]
 
-    # replace multiple blankss
-    tokens = text.split(" ")
-    # replace empty tokens with BLANK_TOKEN
-    tokens = [BLANK_TOKEN if not token.strip() else token for token in tokens]
-
-    tokens = remove_nb_bl_pairs_stack(tokens)
-
+    # The JS side trims the C output (String.trim also removes Unicode spaces)
+    joined = " ".join(tokens).strip()
     if as_string:
-        text = " ".join(tokens)
-        text = re.sub(r"\s+", " ", text).strip()
-        return text
+        return joined
 
-    return tokens
+    return joined.split(" ") if joined else []
 
 
 def highlight_tokens(tok_str, tok_to_highlight, replace_with_str, css_class="src-occurrence"):

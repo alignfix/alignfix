@@ -45,7 +45,6 @@ export async function initPyodide() {
         await pyodide.runPythonAsync(`
             import micropip
             await micropip.install('sqlite3')
-            await micropip.install('ftfy')
             await micropip.install('numpy')
             await micropip.install('bs4')
         `);
