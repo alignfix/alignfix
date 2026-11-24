@@ -87,7 +87,7 @@ def get_project(id):
 
 def get_alignments(project_id):
     _, cursor = get_db()
-    cursor.execute("SELECT row_id, line1, line2, alignment, score FROM alignments WHERE project_id=? AND deleted_at IS NULL", (project_id,))
+    cursor.execute("SELECT row_id, line1, line2, alignment, score FROM alignments WHERE project_id=? AND deleted_at IS NULL ORDER BY row_id", (project_id,))
     alignments = cursor.fetchall()
 
     row_ids = []

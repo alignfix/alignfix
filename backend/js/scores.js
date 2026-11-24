@@ -115,7 +115,7 @@ async function computeStabilityScores(project_id, numCores) {
   try { module.FS.unlink(tgtFilename); } catch(e){}
   try { module.FS.unlink(alignFilename); } catch(e){}
   try { module.FS.unlink(scoreFilename); } catch(e){}
-  const lines = content.split(/\r?\n/);
+  const lines = content.split(/\r?\n/).filter(line => line.trim() !== "");
   const scores = lines
     .map(line => parseFloat(line));
 

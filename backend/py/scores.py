@@ -5,28 +5,46 @@ import json
 from db import get_db
 from collections import Counter
 
+
+def get_active_row_ids(cursor, project_id):
+    """Row ids of the non-deleted alignments, in the same order as get_alignments()."""
+    cursor.execute("""
+        SELECT row_id
+        FROM alignments
+        WHERE project_id = ? AND deleted_at IS NULL
+        ORDER BY row_id
+    """, (project_id,))
+    return [row[0] for row in cursor.fetchall()]
+
+
+def write_scores(project_id, scores, row_ids=None):
+    """
+    Store one score per active alignment. scores[i] belongs to row_ids[i];
+    if row_ids is omitted, scores are matched positionally to the active
+    (non-deleted) rows ordered by row_id, i.e. the order of get_alignments().
+    """
+    conn, cursor = get_db()
+    if row_ids is None:
+        row_ids = get_active_row_ids(cursor, project_id)
+
+    if len(scores) != len(row_ids):
+        print(f"Warning: got {len(scores)} scores for {len(row_ids)} alignments; "
+              f"only the first {min(len(scores), len(row_ids))} are stored.")
+
+    cursor.executemany("""
+        UPDATE alignments
+        SET score = ?
+        WHERE project_id = ? AND row_id = ?
+    """, [(float(score), project_id, row_id) for row_id, score in zip(row_ids, scores)])
+    conn.commit()
+
+
 def import_scores_from_file(project_id, scores):
-    
     try:
-        conn, cursor = get_db()
-        for row_id, score in enumerate(scores):
-            
-            score = float(score)
-            score = round(score, 2)
-
-            cursor.execute("""
-                UPDATE alignments
-                SET score = ?
-                WHERE project_id = ? AND row_id = ?
-            """, (score, project_id, row_id))
-
-        conn.commit()
-
+        write_scores(project_id, [round(float(score), 2) for score in scores])
         return True
-    
-    except json.JSONDecodeError:
-        pass
-    
+    except (ValueError, TypeError, sqlite3.Error) as e:
+        print("Error occurred while importing scores:", e)
     return False
 
 
@@ -38,7 +56,8 @@ def assign_auto_scores(project_id):
         cursor.execute("""
             SELECT row_id, line1, line2
             FROM alignments
-            WHERE project_id = ?
+            WHERE project_id = ? AND deleted_at IS NULL
+            ORDER BY row_id
         """, (project_id,))
 
         alignments = cursor.fetchall()
@@ -95,20 +114,7 @@ def assign_auto_scores(project_id):
         else:
             scores = []
 
-        # Start a single transaction (optional if get_db() already wraps in one)
-        cursor.execute("BEGIN")
-
-        # Build list of (score, project_id, row_id) tuples
-        update_records = [(score, project_id, row_id) for row_id, score in enumerate(scores)]
-
-        # Use executemany to update all rows at once
-        cursor.executemany("""
-            UPDATE alignments
-            SET score = ?
-            WHERE project_id = ? AND row_id = ?
-        """, update_records)
-
-        conn.commit()
+        write_scores(project_id, scores, row_ids=[row[0] for row in alignments])
 
         return True
 
@@ -123,7 +129,7 @@ def get_scores(project_id):
     cursor.execute("""
         SELECT score
         FROM alignments
-        WHERE project_id = ?
+        WHERE project_id = ? AND deleted_at IS NULL AND score IS NOT NULL
     """, (project_id,))
     scores = cursor.fetchall()
     return scores
@@ -155,11 +161,5 @@ def bin_scores(scores, bin_count=20):
     return binned_scores
 
 def save_scores(project_id, scores):
-    conn, cursor = get_db()
-    for row_id, score in enumerate(scores):
-        cursor.execute("""
-            UPDATE alignments
-            SET score = ?
-            WHERE project_id = ? AND row_id = ?
-        """, (score, project_id, row_id))
-    conn.commit()
+    # scores come from get_alignments() order (see backend/js/scores.js)
+    write_scores(project_id, scores)
