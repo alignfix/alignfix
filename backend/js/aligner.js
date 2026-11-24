@@ -19,13 +19,26 @@ import { safeSyncfs } from "./storage.js";
 import { nextFrame } from "../../ui/utils.js";
 import { writeFileInChunks } from "./utils.js";
 
-function cleanAlignment(content) {
-  return content
-    .split(/\r?\n/)
-    .map(line => line.trim())
-    .filter(line => line.length > 0)
-    .filter(line => /^[0-9]+-[0-9]+(\s+[0-9]+-[0-9]+)*$/.test(line))
-    .join("\n");
+const ALIGNMENT_LINE_RE = /^[0-9]+-[0-9]+(\s+[0-9]+-[0-9]+)*$/;
+
+/**
+ * Parse an alignment file into exactly `expected` lines, one per sentence pair.
+ * Empty lines are kept: they are sentence pairs without any alignment point, and
+ * dropping them would shift every following alignment onto the wrong sentence.
+ * Anything after " ||| " (e.g. fast_align -s scores) is removed; invalid lines become "".
+ */
+function parseAlignmentLines(content, expected, label) {
+  const lines = content.split(/\r?\n/);
+  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop(); // trailing newline
+
+  if (lines.length !== expected) {
+    throw new Error(`${label}: expected ${expected} alignment lines, got ${lines.length}`);
+  }
+
+  return lines.map(line => {
+    const links = line.split("|||")[0].trim();
+    return links === "" || ALIGNMENT_LINE_RE.test(links) ? links : "";
+  });
 }
 
 function getFastAlignChunkSize(numCores) {
@@ -70,8 +83,8 @@ async function _computeAlignments(module, atoolsModule, srcLines, tgtLines, numC
     ], { async: true });
     const forwardDuration = ((performance.now() - forwardStart) / 1000).toFixed(1);
     
-    let forwardContent = cleanAlignment(module.FS.readFile(forwardFile, { encoding: "utf8" }));
-    let forwardAlignCount = forwardContent.split('\n').filter(line => line.trim()).length;
+    let forwardLines = parseAlignmentLines(module.FS.readFile(forwardFile, { encoding: "utf8" }), srcLines.length, "forward");
+    let forwardAlignCount = forwardLines.filter(line => line).length;
     console.log(`✅ Forward: ${forwardAlignCount.toLocaleString()} alignments (${forwardDuration}s)`);
     console.log('progress:45');
 
@@ -85,8 +98,8 @@ async function _computeAlignments(module, atoolsModule, srcLines, tgtLines, numC
     ], { async: true });
     const reverseDuration = ((performance.now() - reverseStart) / 1000).toFixed(1);
     
-    let reverseContent = cleanAlignment(module.FS.readFile(reverseFile, { encoding: "utf8" }));
-    let reverseAlignCount = reverseContent.split('\n').filter(line => line.trim()).length;
+    let reverseLines = parseAlignmentLines(module.FS.readFile(reverseFile, { encoding: "utf8" }), srcLines.length, "reverse");
+    let reverseAlignCount = reverseLines.filter(line => line).length;
     console.log(`✅ Reverse: ${reverseAlignCount.toLocaleString()} alignments (${reverseDuration}s)`);
     console.log('progress:75');
 
@@ -95,34 +108,49 @@ async function _computeAlignments(module, atoolsModule, srcLines, tgtLines, numC
     await nextFrame();
 
     const symStart = performance.now();
-    const forwardLines = forwardContent.split('\n').filter(line => line.trim());
-    const reverseLines = reverseContent.split('\n').filter(line => line.trim());
-    writeFileInChunks(atoolsModule, forwardFile, forwardLines);
-    writeFileInChunks(atoolsModule, reverseFile, reverseLines);
-    
-    atoolsModule.ccall("run_atools", "void", ["string", "string", "string"], [
-      forwardFile, reverseFile, symFile,
-    ]);
+    // atools skips (emits nothing for) pairs whose forward alignment is empty, so only
+    // pass the others and put the symmetrized lines back at their original positions.
+    const symIndices = [];
+    for (let i = 0; i < forwardLines.length; i++) {
+      if (forwardLines[i]) symIndices.push(i);
+    }
+    const resultLines = new Array(srcLines.length).fill("");
+
+    let resultContent = null;
+    if (symIndices.length > 0) {
+      // trailing "" so the file ends with a newline and the last line is read
+      writeFileInChunks(atoolsModule, forwardFile, [...symIndices.map(i => forwardLines[i]), ""]);
+      writeFileInChunks(atoolsModule, reverseFile, [...symIndices.map(i => reverseLines[i]), ""]);
+
+      atoolsModule.ccall("run_atools", "void", ["string", "string", "string"], [
+        forwardFile, reverseFile, symFile,
+      ]);
+
+      resultContent = atoolsModule.FS.readFile(symFile, { encoding: "utf8" });
+      const symLines = parseAlignmentLines(resultContent, symIndices.length, "symmetrized");
+      symIndices.forEach((lineIdx, k) => { resultLines[lineIdx] = symLines[k]; });
+    }
     const symDuration = ((performance.now() - symStart) / 1000).toFixed(1);
     
-    let resultContent = atoolsModule.FS.readFile(symFile, { encoding: "utf8" });
-    const resultLines = resultContent.split(/\r?\n/).filter(line => line.trim());
-    
     const totalDuration = ((performance.now() - startTime) / 1000).toFixed(1);
-    console.log(`✅ Symmetrized: ${resultLines.length.toLocaleString()} final alignments (${symDuration}s, total ${totalDuration}s)`);
+    const emptyCount = resultLines.filter(line => !line).length;
+    console.log(`✅ Symmetrized: ${resultLines.length.toLocaleString()} final alignments (${symDuration}s, total ${totalDuration}s)` +
+      (emptyCount ? `, ${emptyCount.toLocaleString()} pairs without alignment points` : ""));
     console.log('progress:100');
 
     // free up memory and resources
     module.FS.unlink(combinedFilename);
     module.FS.unlink(forwardFile);
     module.FS.unlink(reverseFile);
-    atoolsModule.FS.unlink(forwardFile);
-    atoolsModule.FS.unlink(reverseFile);
-    atoolsModule.FS.unlink(symFile);
+    if (symIndices.length > 0) {
+      atoolsModule.FS.unlink(forwardFile);
+      atoolsModule.FS.unlink(reverseFile);
+      atoolsModule.FS.unlink(symFile);
+    }
 
     // Clear large variables to help GC
-    forwardContent = null;
-    reverseContent = null;
+    forwardLines = null;
+    reverseLines = null;
     reverseAlignCount = null;
     forwardAlignCount = null;
     resultContent = null;

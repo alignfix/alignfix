@@ -560,8 +560,16 @@ EMSCRIPTEN_KEEPALIVE
 
       std::ofstream out(output_file, std::ios::trunc);
       
+      // Exactly one line per input pair: outputs already end in '\n' (or are empty
+      // for skipped pairs), so strip it before writing to avoid blank separator
+      // lines that make empty alignments indistinguishable from padding.
       for (const std::string& line : final_outputs) {
-        out << line << "\n";
+        if (!line.empty() && line.back() == '\n') {
+          out.write(line.data(), line.size() - 1);
+        } else {
+          out << line;
+        }
+        out << "\n";
       }
 
       out.close();
