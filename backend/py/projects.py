@@ -336,20 +336,20 @@ def delete_translations_by_phrase_pair(project_id, phrase1, phrase2, direction):
         elif direction == '-1':
             # Target phrase is cause
             print("Direction filter: Target causes source")
-        conditions.append("line1 LIKE ?")
-        conditions.append("line2 LIKE ?")
-        params.append(f"% {phrase1_raw} %")
-        params.append(f"% {phrase2_raw} %")
+        conditions.append("(' ' || line1 || ' ') LIKE ? ESCAPE '\\'")
+        conditions.append("(' ' || line2 || ' ') LIKE ? ESCAPE '\\'")
+        params.append(f"% {_escape_like(phrase1_raw)} %")
+        params.append(f"% {_escape_like(phrase2_raw)} %")
         print(f"Deleting sentences with BOTH phrases")
     elif has_phrase1:
         # Only source phrase
-        conditions.append("line1 LIKE ?")
-        params.append(f"% {phrase1_raw} %")
+        conditions.append("(' ' || line1 || ' ') LIKE ? ESCAPE '\\'")
+        params.append(f"% {_escape_like(phrase1_raw)} %")
         print(f"Deleting sentences with source phrase only")
     else:
         # Only target phrase
-        conditions.append("line2 LIKE ?")
-        params.append(f"% {phrase2_raw} %")
+        conditions.append("(' ' || line2 || ' ') LIKE ? ESCAPE '\\'")
+        params.append(f"% {_escape_like(phrase2_raw)} %")
         print(f"Deleting sentences with target phrase only")
     
     where_clause = " AND ".join(conditions)
@@ -403,6 +403,11 @@ def delete_translations_by_phrase_pair(project_id, phrase1, phrase2, direction):
     
     return len(row_ids)
 
+def _escape_like(text):
+    """Make % and _ in user text match literally in LIKE ... ESCAPE '\\'."""
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def search_translations(project_id, phrase1, phrase2, search_value=None, start=0, length=10):
     conn, cursor = get_db()
 
@@ -410,21 +415,20 @@ def search_translations(project_id, phrase1, phrase2, search_value=None, start=0
     params = [project_id]
 
     if phrase1 or phrase2:  # only add if not empty
-
+        # whole tokens: pad the line with spaces so that phrases at the start
+        # or end of a sentence are found as well
         if phrase1:
-            conditions.append("line1 LIKE ?")
-            params.append(f"% {phrase1} %")
-            
-        if phrase2:  # only add if not empty
-            conditions.append("line2 LIKE ?")
-            params.append(f"% {phrase2} %")
-            
-        where_clause = " AND ".join(conditions)
+            conditions.append("(' ' || line1 || ' ') LIKE ? ESCAPE '\\'")
+            params.append(f"% {_escape_like(phrase1)} %")
+
+        if phrase2:
+            conditions.append("(' ' || line2 || ' ') LIKE ? ESCAPE '\\'")
+            params.append(f"% {_escape_like(phrase2)} %")
 
     elif search_value:
-        conditions.append("line1 LIKE ? OR line2 LIKE ?")
-        params.append(f"%{search_value}%")
-        params.append(f"%{search_value}%")
+        conditions.append("(line1 LIKE ? ESCAPE '\\' OR line2 LIKE ? ESCAPE '\\')")
+        params.append(f"%{_escape_like(search_value)}%")
+        params.append(f"%{_escape_like(search_value)}%")
 
     where_clause = " AND ".join(conditions)
 
