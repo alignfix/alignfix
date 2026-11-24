@@ -132,35 +132,37 @@ async function _tokeniseLines(module, inputLines, numCores) {
 
   // split on newlines
   if (!tokenizedContent.trim()) {
-    console.log("⚠️ No tokenized content found - returning empty array");
+    console.log("⚠️ No tokenized content found - returning empty lines");
     console.log('progress:100');
-    return [];
+    return new Array(inputLines.length).fill("");
   }
   
   console.log('operation:Sorting and formatting tokenized lines');
   console.log('progress:85');
   
-  const lines = tokenizedContent.trim().split("\n");
-  console.log(`📊 Processing ${lines.length.toLocaleString()} tokenized lines`);
+  // Each output line is "<line index>|||<tokens>", written by the threads in any
+  // order. Place every line at its index so the result has exactly one entry per
+  // input line (an empty last input line never reaches the file, for example).
+  const outputLines = tokenizedContent.split("\n");
+  console.log(`📊 Processing ${outputLines.length.toLocaleString()} tokenized lines`);
 
-  // sort lines by first column ||| asc
-  lines.sort((a, b) => {
-    const aParts = a.split("|||");
-    const bParts = b.split("|||");
-    const index1 = parseInt(aParts[0]);
-    const index2 = parseInt(bParts[0]);
-    return index1 - index2;
-  });
-  
-  console.log('✅ Lines sorted by index');
-  console.log('progress:90');
-
-  // remove first column |||
-  for (let i = 0; i < lines.length; i++) {
-    const parts = lines[i].split("|||");
-    parts.shift();
-    lines[i] = parts.join("|||").trim();
+  const lines = new Array(inputLines.length).fill("");
+  let placed = 0;
+  for (const line of outputLines) {
+    const sep = line.indexOf("|||");
+    if (sep < 0) continue;
+    const index = parseInt(line.slice(0, sep), 10);
+    if (Number.isInteger(index) && index >= 0 && index < lines.length) {
+      lines[index] = line.slice(sep + 3).trim();
+      placed++;
+    }
   }
+  if (placed !== inputLines.length) {
+    console.warn(`⚠️ Tokenizer returned ${placed} of ${inputLines.length} lines; missing lines are left empty`);
+  }
+
+  console.log('✅ Lines placed by index');
+  console.log('progress:90');
 
   // free up memory and resources
   module.FS.unlink(inputFile);

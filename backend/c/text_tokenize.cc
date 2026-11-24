@@ -20,12 +20,13 @@
 #include <ctype.h>
 #include <pthread.h>
 #include <emscripten/emscripten.h>
+#include <string>
+#include <vector>
 
-#define MAX_TOKENS 512
-#define MAX_TOKEN_LENGTH 64
+#include "line_reader.h"
+
 #define BLANK_TOKEN "#BL"
 #define NO_BLANK_TOKEN "#NB"
-#define MAX_LINE_LENGTH 4096
 
 // Split symbols
 const char *SPLIT_SYMBOLS[] = {
@@ -58,28 +59,6 @@ void clean_text(const char *input, char *output, size_t output_size) {
 }
 
 
-int remove_nb_bl_pairs_stack(char tokens[MAX_TOKENS][MAX_TOKEN_LENGTH], int token_count) {
-    char stack[MAX_TOKENS][MAX_TOKEN_LENGTH];
-    int stack_size = 0;
-
-    for (int i = 0; i < token_count; i++) {
-        if (stack_size > 0 &&
-            ((strcmp(stack[stack_size - 1], NO_BLANK_TOKEN) == 0 && strcmp(tokens[i], BLANK_TOKEN) == 0) ||
-             (strcmp(stack[stack_size - 1], BLANK_TOKEN) == 0 && strcmp(tokens[i], NO_BLANK_TOKEN) == 0))) {
-            stack_size--; // Remove the last token from the stack
-        } else {
-            strncpy(stack[stack_size++], tokens[i], MAX_TOKEN_LENGTH - 1);
-        }
-    }
-
-    // Copy the stack back to the tokens array
-    for (int i = 0; i < stack_size; i++) {
-        strncpy(tokens[i], stack[i], MAX_TOKEN_LENGTH - 1);
-    }
-
-    return stack_size;
-}
-
 char* tokenise(const char *text) {
 
     size_t len = strlen(text);
@@ -91,9 +70,10 @@ char* tokenise(const char *text) {
     if (!acc) {
         return NULL;
     }
+    acc[0] = '\0';  // empty input writes nothing below
     char *p = acc; // pointer to current write position
 
-    for (size_t i = 0; i < strlen(text); i++) {
+    for (size_t i = 0; i < len; i++) {
         char c = text[i];
         char s[2] = {c, '\0'}; // null-terminated string
         if (is_split_symbol(s)) {
@@ -111,93 +91,54 @@ char* tokenise(const char *text) {
         }
     }
 
-    // now split acc into tokens by space
-
-    char tokens[MAX_TOKENS][MAX_TOKEN_LENGTH];
-    int token_count = 0;
-
-    // Work on a copy because strtok modifies the string
-    char *acc_copy = strdup(acc);
-    if (!acc_copy) {
-        fprintf(stderr, "Memory allocation failed\n");
-        free(acc);
-        return NULL;
-    }
+    // now split acc into tokens by space (any number of tokens of any length;
+    // fixed-size arrays used to cut tokens at 63 bytes and lines at 512 tokens)
+    std::vector<std::string> tokens;
 
     char *saveptr = NULL;
-    char *token = strtok_r(acc_copy, " ", &saveptr);
+    char *token = strtok_r(acc, " ", &saveptr);
 
-    while (token && token_count < MAX_TOKENS) {
-        if (strlen(token) == 0) {
-            token = strtok_r(NULL, " ", &saveptr);
-            continue;
-        }
-
-        // Ensure token storage is safe
-        strncpy(tokens[token_count], token, MAX_TOKEN_LENGTH - 1);
-        tokens[token_count][MAX_TOKEN_LENGTH - 1] = '\0';
-
-        // Merge / overwrite logic
-        if (token_count > 0) {
-            if (is_blank_token(tokens[token_count]) &&
-                strcmp(tokens[token_count - 1], NO_BLANK_TOKEN) == 0) {
-                strncpy(tokens[token_count - 1], BLANK_TOKEN, MAX_TOKEN_LENGTH - 1);
-                tokens[token_count - 1][MAX_TOKEN_LENGTH - 1] = '\0';
-                token_count--;  // remove current token
-            } else if (strcmp(tokens[token_count], NO_BLANK_TOKEN) == 0 &&
-                    is_blank_token(tokens[token_count - 1])) {
-                token_count--;  // skip current NB
-            } else if (strcmp(tokens[token_count], NO_BLANK_TOKEN) == 0 &&
-                    strcmp(tokens[token_count - 1], NO_BLANK_TOKEN) == 0) {
-                token_count--;  // skip duplicate NB
+    while (token) {
+        if (strlen(token) > 0) {
+            bool push = true;
+            // Merge / overwrite logic
+            if (!tokens.empty()) {
+                std::string &prev = tokens.back();
+                if (is_blank_token(token) && prev == NO_BLANK_TOKEN) {
+                    prev = BLANK_TOKEN;   // NB followed by blank becomes a blank
+                    push = false;
+                } else if (strcmp(token, NO_BLANK_TOKEN) == 0 && is_blank_token(prev.c_str())) {
+                    push = false;         // skip NB after a blank
+                } else if (strcmp(token, NO_BLANK_TOKEN) == 0 && prev == NO_BLANK_TOKEN) {
+                    push = false;         // skip duplicate NB
+                }
             }
+            if (push) tokens.push_back(token);
         }
-
-        token_count++;
         token = strtok_r(NULL, " ", &saveptr);
     }
 
-    free(acc_copy);
-
     // === Join tokens back ===
-    acc[0] = '\0';
-    size_t acc_len = 0;
-    size_t acc_capacity = strlen(text) * 12 + 1; // safe overestimate
-
+    std::string joined;
+    int token_count = (int)tokens.size();
     for (int i = 0; i < token_count; i++) {
-        // Replace BL token with single space
-        if (is_blank_token(tokens[i])) {
+        // Blanks are only separators
+        if (is_blank_token(tokens[i].c_str())) {
             continue;
-            // strncpy(tokens[i], " ", MAX_TOKEN_LENGTH - 1);
-            // tokens[i][MAX_TOKEN_LENGTH - 1] = '\0';
         }
-
-        // Skip consecutive spaces
-        if (i > 0 && strcmp(tokens[i], " ") == 0 && strcmp(tokens[i - 1], " ") == 0)
-            continue;
 
         // Skip final NB
-        if (i == token_count - 1 && strcmp(tokens[i], NO_BLANK_TOKEN) == 0)
+        if (i == token_count - 1 && tokens[i] == NO_BLANK_TOKEN)
             continue;
 
-        // Append with safety
-        size_t needed = strlen(tokens[i]) + 2; // + space + null
-        if (acc_len + needed >= acc_capacity) {
-            fprintf(stderr, "Token join overflow prevented\n");
-            break;
-        }
-
-        strcat(acc, tokens[i]);
-        acc_len += strlen(tokens[i]);
-
+        joined += tokens[i];
         if (i < token_count - 1) {
-            strcat(acc, " ");
-            acc_len++;
+            joined += ' ';
         }
-
     }
 
-    return acc;
+    free(acc);
+    return strdup(joined.c_str());
 
 }
 
@@ -225,6 +166,13 @@ void *worker(void *arg)
         return NULL;
     }
     int tokenised_count = 0;
+    // Line index of each tokenised line (lines that are NULL are skipped)
+    int *line_indices = (int *)malloc((args->end_index - args->start_index + 1) * sizeof(int));
+    if (!line_indices) {
+        fprintf(stderr, "Memory allocation failed for line_indices\n");
+        free(tokenised_lines);
+        return NULL;
+    }
 
     // Tokenise each line locally without locking
     for (int row_id = args->start_index; row_id < args->end_index; row_id++)
@@ -232,8 +180,9 @@ void *worker(void *arg)
         if (!args->lines[row_id])
             continue;
 
+        line_indices[tokenised_count] = row_id;
         char *tokenised = tokenise(args->lines[row_id]);
-        tokenised_lines[tokenised_count++] = tokenised;
+        tokenised_lines[tokenised_count++] = tokenised ? tokenised : strdup("");
     }
 
     // Now write all lines to the file at once while holding the mutex
@@ -248,15 +197,17 @@ void *worker(void *arg)
         for (int i = 0; i < tokenised_count; i++)
             free(tokenised_lines[i]);
         free(tokenised_lines);
+        free(line_indices);
         return NULL;
     }
 
     for (int i = 0; i < tokenised_count; i++)
     {
-        fprintf(log_file, "%d|||%s\n", args->start_index + i, tokenised_lines[i]);
+        fprintf(log_file, "%d|||%s\n", line_indices[i], tokenised_lines[i]);
         free(tokenised_lines[i]);  // free each line after writing
     }
     free(tokenised_lines);
+    free(line_indices);
 
     fclose(log_file);
     pthread_mutex_unlock(&print_mutex);
@@ -297,6 +248,8 @@ void tokenize_parallel(
         args[t].end_index = (t + 1) * chunk_size;
         if (args[t].end_index > line_count)
             args[t].end_index = line_count;
+        if (args[t].start_index > args[t].end_index)
+            args[t].start_index = args[t].end_index;  // more threads than lines
         args[t].lines = lines;
         args[t].output_file_path = output_file_path;
 
@@ -326,21 +279,17 @@ int tokenize_file(const char *input_file, const char *output_file, const int num
     char **lines = NULL;
     size_t lines_allocated = 0;
     size_t line_count = 0;
-    char buffer[MAX_LINE_LENGTH];
+    char *buffer;
 
-    while (fgets(buffer, sizeof(buffer), in_file)) {
-        // Remove trailing newline
-        buffer[strcspn(buffer, "\r\n")] = '\0';
-        buffer[strcspn(buffer, "\n")] = '\0';
-
+    while ((buffer = read_line(in_file)) != NULL) {
         // Allocate more space if needed
         if (line_count >= lines_allocated) {
             lines_allocated = lines_allocated ? lines_allocated * 2 : 16;
             lines = (char **)realloc(lines, lines_allocated * sizeof(char *));
         }
 
-        // Store a copy of the line
-        lines[line_count] = strdup(buffer);
+        // Store the line (read_line allocates it)
+        lines[line_count] = buffer;
         line_count++;
     }
 

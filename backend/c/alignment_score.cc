@@ -26,11 +26,8 @@
 #include <algorithm>
 #include <vector>
 
-#define MAX_LINE_LENGTH 4096
-#define MAX_PHRASE_LENGTH 512
-#define MAX_TOKENS_PER_LINE 512
-#define MAX_ALIGNMENTS_PER_LINE 256
-#define MAX_PHRASES_PER_LINE 2048
+#include "line_reader.h"
+
 
 typedef struct
 {
@@ -41,24 +38,24 @@ typedef struct
 // Global file mutex for safe file access
 static pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-// Parse alignments "0-0 1-2 ..."
-int parse_alignments(char *line, Alignment *alignments)
+// Parse alignments "0-0 1-2 ..." (any number of links; modifies line)
+void parse_alignments(char *line, std::vector<Alignment> &alignments)
 {
-    int count = 0;
+    alignments.clear();
     char *saveptr = NULL;  // strtok_r: strtok's global state is not thread-safe
-    char *token = strtok_r(line, " \t\n", &saveptr);
-    while (token && count < MAX_ALIGNMENTS_PER_LINE)
+    char *token = strtok_r(line, " \t\r\n", &saveptr);
+    while (token)
     {
         int s, t;
         if (sscanf(token, "%d-%d", &s, &t) == 2)
         {
-            alignments[count].src = s;
-            alignments[count].tgt = t;
-            count++;
+            Alignment a;
+            a.src = s;
+            a.tgt = t;
+            alignments.push_back(a);
         }
-        token = strtok_r(NULL, " \t\n", &saveptr);
+        token = strtok_r(NULL, " \t\r\n", &saveptr);
     }
-    return count;
 }
 
 // Count tokens in a line
@@ -196,23 +193,17 @@ void *worker(void *arg)
         int src_len = count_tokens(args->src_lines[row_id]);
         int tgt_len = count_tokens(args->tgt_lines[row_id]);
         
-        // Parse alignments (make a copy since we need to sort them)
-        Alignment alignments[MAX_ALIGNMENTS_PER_LINE];
-        char align_line_copy[MAX_LINE_LENGTH];
-        strncpy(align_line_copy, args->align_lines[row_id], MAX_LINE_LENGTH - 1);
-        align_line_copy[MAX_LINE_LENGTH - 1] = '\0'; // Ensure null termination
-
-        // Remove trailing \n or \r\n
-        size_t len = strlen(align_line_copy);
-        while (len > 0 && (align_line_copy[len-1] == '\n' || align_line_copy[len-1] == '\r')) {
-            align_line_copy[len-1] = '\0';
-            len--;
+        // Parse alignments (on a copy, strtok_r modifies the string)
+        std::vector<Alignment> alignments;
+        char *align_line_copy = strdup(args->align_lines[row_id]);
+        if (align_line_copy) {
+            parse_alignments(align_line_copy, alignments);
+            free(align_line_copy);
         }
-        
-        int align_count = parse_alignments(align_line_copy, alignments);
 
         // Compute the alignment stability score
-        float alignment_score = compute_alignment_stability(alignments, align_count, src_len, tgt_len);
+        float alignment_score = compute_alignment_stability(
+            alignments.data(), (int)alignments.size(), src_len, tgt_len);
 
         // Store by line index; the file is written in order after all threads join.
         // (Writing directly from the threads interleaved lines in completion order.)
@@ -301,9 +292,7 @@ extern "C"
     )   {
         char **src_lines = NULL;
         char **tgt_lines = NULL;
-        float *score_lines = NULL;
         char **align_lines = NULL;
-        char line[MAX_LINE_LENGTH];
 
         FILE *src_file = fopen(src_file_path, "r");
         FILE *tgt_file = fopen(tgt_file_path, "r");
@@ -335,32 +324,32 @@ extern "C"
         int array_index = 0;
         
         while (array_index < line_count) {
-            // Read from all files simultaneously
-            char *src_result = fgets(line, sizeof(line), src_file);
-            if (src_result && file_line_index >= start_idx && file_line_index < end_idx) {
-                src_lines[array_index] = strdup(line);
+            // Read from all files simultaneously (lines of any length)
+            char *src_result = read_line(src_file);
+            char *tgt_result = read_line(tgt_file);
+            char *align_result = read_line(align_file);
+
+            bool in_range = file_line_index >= start_idx && file_line_index < end_idx;
+            if (in_range) {
+                src_lines[array_index] = src_result;
+                tgt_lines[array_index] = tgt_result;
+                align_lines[array_index] = align_result;
+            } else {
+                free(src_result);
+                free(tgt_result);
+                free(align_result);
             }
-            
-            char *tgt_result = fgets(line, sizeof(line), tgt_file);
-            if (tgt_result && file_line_index >= start_idx && file_line_index < end_idx) {
-                tgt_lines[array_index] = strdup(line);
-            }
-            
-            char *align_result = fgets(line, sizeof(line), align_file);
-            if (align_result && file_line_index >= start_idx && file_line_index < end_idx) {
-                align_lines[array_index] = strdup(line);
-            }
-            
+
             // Check if we've reached end of any file
             if (!src_result || !tgt_result || !align_result) {
                 break;
             }
-            
+
             // Only increment array index if we're in the target range
-            if (file_line_index >= start_idx && file_line_index < end_idx) {
+            if (in_range) {
                 array_index++;
             }
-            
+
             file_line_index++;
         }
 
