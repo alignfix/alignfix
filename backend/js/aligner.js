@@ -309,11 +309,12 @@ export async function recomputeAlignments(project_id) {
     pyodide.globals.set("tgt_lines", dataObj.lines2);
     pyodide.globals.set("align_lines", alignments);
     pyodide.globals.set("score_lines", dataObj.scores);
+    pyodide.globals.set("row_ids", dataObj.row_ids);
 
     const updateStart = performance.now();
     await pyodide.runPythonAsync(`
         from projects import update_alignments
-        update_alignments(project_id, align_lines)
+        update_alignments(project_id, align_lines, row_ids)
     `);
     const updateDuration = ((performance.now() - updateStart) / 1000).toFixed(1);
 

@@ -3,18 +3,8 @@ import sqlite3
 import json
 
 from db import get_db
+from projects import get_alignment_row_ids
 from collections import Counter
-
-
-def get_active_row_ids(cursor, project_id):
-    """Row ids of the non-deleted alignments, in the same order as get_alignments()."""
-    cursor.execute("""
-        SELECT row_id
-        FROM alignments
-        WHERE project_id = ? AND deleted_at IS NULL
-        ORDER BY row_id
-    """, (project_id,))
-    return [row[0] for row in cursor.fetchall()]
 
 
 def write_scores(project_id, scores, row_ids=None):
@@ -25,7 +15,7 @@ def write_scores(project_id, scores, row_ids=None):
     """
     conn, cursor = get_db()
     if row_ids is None:
-        row_ids = get_active_row_ids(cursor, project_id)
+        row_ids = get_alignment_row_ids(project_id)
 
     if len(scores) != len(row_ids):
         print(f"Warning: got {len(scores)} scores for {len(row_ids)} alignments; "

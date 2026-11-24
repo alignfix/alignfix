@@ -489,16 +489,20 @@ export async function extractPhrases(project_id) {
     console.log('operation:Loading alignments and ignored phrases');
     const result = await profiler.measure('load_alignments_py', async () => {
       return pyodide.runPythonAsync(`
-        from projects import get_alignments
+        from projects import get_alignments, get_alignment_row_ids
         from phrases import get_all_phrases_to_ignore
 
         src_lines, tgt_lines, align_lines, score_lines = get_alignments(project_id)
+        row_ids = get_alignment_row_ids(project_id)
         ignore_pairs = set(get_all_phrases_to_ignore(project_id))
 
-        (src_lines, tgt_lines, align_lines, score_lines, list(ignore_pairs))
+        (src_lines, tgt_lines, align_lines, score_lines, list(ignore_pairs), row_ids)
       `);
     });
-    const [src_lines, tgt_lines, align_lines, score_lines, ignore_pairs] = result;
+    const [src_lines, tgt_lines, align_lines, score_lines, ignore_pairs, row_ids_proxy] = result;
+    // The extraction works on list positions; occurrences must be stored as row ids,
+    // which differ from positions once lines have been deleted.
+    const rowIds = Array.from(row_ids_proxy);
     
     console.log(`📊 Loaded ${src_lines.length.toLocaleString()} alignment pairs`);
     console.log(`🚫 Found ${ignore_pairs.length.toLocaleString()} phrases to ignore`);
@@ -530,6 +534,9 @@ export async function extractPhrases(project_id) {
       poolSize,
       ignore_pairs
     );
+    for (const phrase of phrases) {
+      phrase.occurrences = phrase.occurrences.map(position => rowIds[position]);
+    }
     
     try {
         pyodide.globals.set("project_id", project_id);

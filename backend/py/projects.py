@@ -104,6 +104,16 @@ def get_alignments(project_id):
 
     return src_lines, tgt_lines, align_lines, score_lines
 
+def get_alignment_row_ids(project_id):
+    """
+    Row ids of the active alignments, in get_alignments() order. Use it to map
+    list positions (as used by the WASM modules) back to row ids: they differ as
+    soon as a line has been deleted.
+    """
+    _, cursor = get_db()
+    cursor.execute("SELECT row_id FROM alignments WHERE project_id=? AND deleted_at IS NULL ORDER BY row_id", (project_id,))
+    return [row[0] for row in cursor.fetchall()]
+
 def save_alignments(project_id, src_lines, tgt_lines, align_lines, score_lines):
     conn, cursor = get_db()
     for row_id, (src, tgt, align, score) in enumerate(zip(src_lines, tgt_lines, align_lines, score_lines)):
@@ -111,9 +121,14 @@ def save_alignments(project_id, src_lines, tgt_lines, align_lines, score_lines):
                   (row_id, src, tgt, align, score, project_id))
     conn.commit()
 
-def update_alignments(project_id, align_lines):
+def update_alignments(project_id, align_lines, row_ids=None):
+    """align_lines[i] belongs to row_ids[i] (default: get_alignment_row_ids order)."""
     conn, cursor = get_db()
-    for row_id, (align) in enumerate(align_lines):
+    if row_ids is None:
+        row_ids = get_alignment_row_ids(project_id)
+    if len(row_ids) != len(align_lines):
+        raise ValueError(f"Got {len(align_lines)} alignments for {len(row_ids)} rows")
+    for row_id, align in zip(row_ids, align_lines):
         cursor.execute('UPDATE alignments SET alignment=?, synced_at=CURRENT_TIMESTAMP WHERE row_id=? AND project_id=?',
                   (align, row_id, project_id))
     conn.commit()
@@ -213,10 +228,11 @@ def get_project_data_for_download(project_id, export_phrases=False):
 def get_project_data_for_alignments(project_id):
     _, cursor = get_db()
 
-    cursor.execute("SELECT row_id, line1, line2, alignment, score FROM alignments WHERE project_id=? AND deleted_at IS NULL", (project_id,))
+    cursor.execute("SELECT row_id, line1, line2, alignment, score FROM alignments WHERE project_id=? AND deleted_at IS NULL ORDER BY row_id", (project_id,))
     alignments = cursor.fetchall()
 
     project_data = {
+        "row_ids": [row[0] for row in alignments],
         "lines1": [row[1] for row in alignments],
         "lines2": [row[2] for row in alignments],
         "scores": [row[4] for row in alignments]
