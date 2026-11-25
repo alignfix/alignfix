@@ -57,7 +57,7 @@ const TEXT_SIZE_KEY = 'alignfix-text-size';
 function getTextSize() {
   let pct = 100;
   try { pct = Number(localStorage.getItem(TEXT_SIZE_KEY)) || 100; } catch (e) { /* private mode */ }
-  return Math.min(180, Math.max(80, pct));
+  return Math.min(200, Math.max(80, pct));
 }
 
 export async function renderProject(id, params = new URLSearchParams()) {
@@ -84,7 +84,7 @@ export async function renderProject(id, params = new URLSearchParams()) {
     <div class="d-flex flex-wrap align-items-center gap-2">
       <label class="text-size-control" title="Text size of phrases and sentences">
         <i class="fas fa-font text-size-small" aria-hidden="true"></i>
-        <input type="range" class="form-range" id="text-size-range" min="80" max="180" step="10"
+        <input type="range" class="form-range" id="text-size-range" min="80" max="200" step="10"
                aria-label="Text size of phrases and sentences">
         <i class="fas fa-font text-size-large" aria-hidden="true"></i>
         <span id="text-size-value" class="text-size-value tabular"></span>
