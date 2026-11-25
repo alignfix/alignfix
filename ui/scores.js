@@ -638,7 +638,7 @@ export async function renderScores(projectId) {
     }).filter(p => !isNaN(p.src) && !isNaN(p.tgt));
 
     // Create alignment matrix with better sizing
-    let html = '<div style="overflow-x: auto;"><table class="table table-bordered table-sm align-middle" style="font-size: 0.8em; min-width: 100%; width: max-content;"><thead><tr><th style="position: sticky; left: 0; background: white; z-index: 10;"></th>';
+    let html = '<div style="overflow-x: auto;"><table class="table table-bordered table-sm align-middle" style="font-size: 0.8em; min-width: 100%; width: max-content;"><thead><tr><th style="position: sticky; left: 0; background: var(--surface); z-index: 10;"></th>';
     
     // Header row with target tokens
     tgtTokens.forEach((token, idx) => {
@@ -653,7 +653,7 @@ export async function renderScores(projectId) {
     // Rows for source tokens
     srcTokens.forEach((srcToken, srcIdx) => {
       if (srcToken == "#NB") { srcToken = "_"; }
-      html += `<tr><th style="position: sticky; left: 0; background: white; z-index: 5; min-width: 50px; max-width: 120px; padding: 8px;">
+      html += `<tr><th style="position: sticky; left: 0; background: var(--surface); z-index: 5; min-width: 50px; max-width: 120px; padding: 8px;">
                  <div style="font-weight: bold;">${srcIdx}</div>
                  <div style="font-size: 0.9em; word-break: break-word;">${escapeHtml(srcToken)}</div>
                </th>`;
@@ -746,7 +746,7 @@ export async function renderScores(projectId) {
         document.querySelectorAll('.src-word, .tgt-word').forEach(w => {
           w.style.backgroundColor = '';
           w.style.fontWeight = '';
-          w.style.color = '#212529'; // Reset to default dark text color
+          w.style.color = ''; // back to the theme's text colour
         });
         document.querySelectorAll('.align-cell').forEach(cell => {
           cell.style.outline = '';
@@ -788,7 +788,7 @@ export async function renderScores(projectId) {
         document.querySelectorAll('.src-word, .tgt-word').forEach(w => {
           w.style.backgroundColor = '';
           w.style.fontWeight = '';
-          w.style.color = '#212529'; // Reset to default dark text color
+          w.style.color = ''; // back to the theme's text colour
         });
         document.querySelectorAll('.align-cell').forEach(cell => {
           cell.style.outline = '';

@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <!-- collects console output for the log panel: load before all other scripts -->
+  <script src="ui/theme.js"></script>
   <script src="ui/log-panel.js"></script>
   <title>AlignFix</title>
   <link rel="icon" type="image/x-icon" href="ui/img/favicon.ico" />
@@ -70,6 +71,11 @@
               </li>
               <li id="about" class="nav-item">
                   <a class="nav-link" href="#about"><i class="fas fa-circle-info me-1"></i>About</a>
+              </li>
+              <li class="nav-item">
+                  <button type="button" class="nav-link theme-toggle" title="Switch to dark mode" aria-label="Switch to dark mode">
+                      <i class="fas fa-moon theme-icon-light"></i><i class="fas fa-sun theme-icon-dark"></i>
+                  </button>
               </li>
           </ul>
         </nav>
