@@ -18,22 +18,31 @@
 
 import { initPyodide } from "../../pyodide.js";
 import { downloadBlob, safeFilename } from "./utils.js";
+import { safeSyncfs } from "./storage.js";
 
-async function callReview(fn, args) {
+let callCounter = 0;
+
+async function callReview(fn, args, { write = false } = {}) {
   const pyodide = await initPyodide();
-  pyodide.globals.set("rv_args", pyodide.toPy(args));
+  // a name per call: calls can overlap (one waits for storage while another starts)
+  const name = `rv_args_${++callCounter}`;
+  pyodide.globals.set(name, pyodide.toPy(args));
   try {
     const json = await pyodide.runPythonAsync(`
 import json, inspect
 import review
-rv_result = review.${fn}(**rv_args)
-if inspect.isawaitable(rv_result):
-    rv_result = await rv_result
-json.dumps(rv_result, ensure_ascii=False)
+async def _rv_call(fn, kwargs):
+    # locals only: overlapping calls must not share a global result
+    result = fn(**kwargs)
+    if inspect.isawaitable(result):
+        result = await result
+    return json.dumps(result, ensure_ascii=False)
+await _rv_call(review.${fn}, ${name})
 `);
+    if (write) await safeSyncfs(pyodide);   // keep the change in browser storage
     return JSON.parse(json);
   } finally {
-    pyodide.globals.delete("rv_args");
+    pyodide.globals.delete(name);
   }
 }
 
@@ -67,20 +76,21 @@ export function fetchReviewOverview(params) {
 
 /** Mark sentence pairs OK (ok = false: remove the mark). Returns the number changed. */
 export function markPairs(project_id, rowIds, ok = true) {
-  return callReview("mark_pairs", { project_id: parseInt(project_id), row_ids: rowIds.map(Number), ok: !!ok });
+  return callReview("mark_pairs", { project_id: parseInt(project_id), row_ids: rowIds.map(Number), ok: !!ok },
+    { write: true });
 }
 
 /** Mark every open pair matching the filters OK. */
 export function markAllPairs(params) {
   const { project_id, search, min_level, kind, side } = filters(params);
-  return callReview("mark_all", { project_id, search, min_level, kind, side, ok: true });
+  return callReview("mark_all", { project_id, search, min_level, kind, side, ok: true }, { write: true });
 }
 
 /** Mark a word OK: it is not flagged any more (it stays in the phrase table). */
 export function markWord(project_id, side, word, ok = true) {
   return callReview("mark_word", {
     project_id: parseInt(project_id), side: side === "tgt" ? "tgt" : "src", word: String(word), ok: !!ok,
-  });
+  }, { write: true });
 }
 
 /**
