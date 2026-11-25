@@ -16,10 +16,15 @@ Severity of a sentence pair by its issue score (issues.issue_score):
 On a real German-Italian corpus with 2% injected errors, 30% of the high pairs
 were injected errors (most of the rest real mismatches), against 2% at random.
 
+Pairs and words a person checked can be marked OK: they stay out of the
+list (status "open") until the text of the pair changes. Words marked OK are
+not flagged at all, like hidden words, but stay in the phrase table.
+
 Results are cached per project until the sentences or the hide list change.
 The phrase table (phrase_table) summarises the extracted phrase pairs per
 source phrase, for export.
 """
+import hashlib
 import math
 from collections import Counter, defaultdict
 
@@ -60,10 +65,27 @@ def _signature(cursor, project_id):
     return cursor.fetchone()
 
 
+def text_hash(line1, line2):
+    return hashlib.sha1(f"{line1 or ''}\t{line2 or ''}".encode("utf-8")).hexdigest()[:16]
+
+
+def _ok_words(cursor, project_id):
+    cursor.execute("SELECT side, word FROM review_ok_words WHERE project_id=?", (project_id,))
+    return cursor.fetchall()
+
+
+def _ok_rows(cursor, project_id):
+    """{row_id: text hash} of the pairs marked OK."""
+    cursor.execute("SELECT row_id, text_hash FROM review_marks WHERE project_id=? AND status='ok'", (project_id,))
+    return dict(cursor.fetchall())
+
+
 def _hidden_words(cursor, project_id):
-    """{'src': set, 'tgt': set} of single words hidden whatever their translation."""
+    """{'src': set, 'tgt': set} of single words hidden whatever their translation, or marked OK."""
     cursor.execute("SELECT src_phrase, tgt_phrase FROM ignored WHERE project_id=?", (project_id,))
     hidden = {"src": set(), "tgt": set()}
+    for side, word in _ok_words(cursor, project_id):
+        hidden["src" if side == "src" else "tgt"].add(word)
     for src, tgt in cursor.fetchall():
         src, tgt = (src or "").strip(), (tgt or "").strip()
         if src and not tgt and " " not in src:
@@ -95,7 +117,7 @@ async def _check_all(project_id, cursor):
                 await progress.checkpoint(i / n, f"{i:,} / {len(rows):,} sentences")
             found = sentence_issues(model, line1, line2)
             if found:
-                checked.append((row_id, found))
+                checked.append((row_id, found, text_hash(line1, line2)))
     raw = {"model": model, "checked": len(rows), "found": checked}
     _cache[project_id] = (sig, raw)
     _views.pop(project_id, None)
@@ -121,13 +143,13 @@ async def analyse(project_id):
     model = raw["model"]
     sentences = []
     words = {}
-    for row_id, found in raw["found"]:
+    for row_id, found, hashed in raw["found"]:
         found = [f for f in found
                  if not (f["kind"] in ("missing", "unexplained") and f["word"] in hidden[f["side"]])]
         if not found:
             continue
         score = issue_score(found)
-        sentences.append({"row_id": row_id, "score": score, "level": level(score), "issues": found})
+        sentences.append({"row_id": row_id, "score": score, "level": level(score), "issues": found, "hash": hashed})
         for f in found:
             # the words list only counts clear cases: function words, whose translations
             # appear almost everywhere, are missed often but say little each time
@@ -207,6 +229,7 @@ def _sentence_view(row, line1, line2):
             mismatch = True
     return {
         "row_id": row["row_id"],
+        "ok": bool(row.get("ok")),
         "score": row["score"],
         "level": row["level"],
         "mismatch": mismatch,
@@ -218,8 +241,7 @@ def _sentence_view(row, line1, line2):
     }
 
 
-def _summary(analysis):
-    sentences = analysis["sentences"]
+def _summary(analysis, sentences, ok_count=0, ok_words=0):
     by_level = Counter(r["level"] for r in sentences)
     kinds = defaultdict(Counter)       # kind -> level -> sentences
     for r in sentences:
@@ -234,27 +256,48 @@ def _summary(analysis):
                   for kind in KIND_LABELS if kinds[kind]],
         "top_words": [[w["side"], w["word"], w["flagged"]] for w in top_words],
         "thresholds": {"high": HIGH_SCORE, "medium": MEDIUM_SCORE},
+        "ok": ok_count,
+        "ok_words": ok_words,
     }
 
 
-async def review_overview(project_id, view="sentences", start=0, length=25, search="",
-                          min_level="medium", kind="", side=""):
-    """One page of the sentence or word list, plus the summary of the whole project."""
+STATUSES = ("open", "ok", "all")
+
+
+async def _filtered(project_id, view, search, min_level, kind, side, status):
+    """(analysis, rows, summary): the sentence pairs or words matching the filters, in list order."""
     analysis = await analyse(project_id)
     _, cursor = get_db()
-    start, length = max(0, int(start or 0)), max(1, min(200, int(length or 25)))
     needle = (search or "").strip().casefold()
     threshold = LEVELS.get(min_level, MEDIUM_SCORE)
+    status = status if status in STATUSES else "open"
+
+    marks = _ok_rows(cursor, project_id)
+    for r in analysis["sentences"]:
+        r["ok"] = marks.get(r["row_id"]) == r["hash"]
+    open_rows = [r for r in analysis["sentences"] if not r["ok"]]
+    ok_words = _ok_words(cursor, project_id)
+    summary = _summary(analysis, open_rows, len(analysis["sentences"]) - len(open_rows), len(ok_words))
 
     if view == "words":
-        rows = [w for w in analysis["words"].values() if not side or w["side"] == side]
+        if status == "ok":
+            rows = [{"side": s_, "word": w, "ok": True, "flagged": 0, "sentences": 0, "rate": None,
+                     "expected": [], "severity": 0.0} for s_, w in sorted(ok_words, key=lambda x: (x[1], x[0]))]
+        else:
+            rows = [dict(w, ok=False) for w in analysis["words"].values()]
+            rows.sort(key=lambda w: (-w["severity"], -w["flagged"], w["word"]))
+            if status == "all":
+                rows += [{"side": s_, "word": w, "ok": True, "flagged": 0, "sentences": 0, "rate": None,
+                          "expected": [], "severity": 0.0} for s_, w in sorted(ok_words, key=lambda x: (x[1], x[0]))]
+        if side:
+            rows = [w for w in rows if w["side"] == side]
         if needle:
             rows = [w for w in rows if needle in w["word"] or any(needle in e for e in w["expected"])]
-        rows.sort(key=lambda w: (-w["severity"], -w["flagged"], w["word"]))
-        page = [{k: v for k, v in w.items() if k != "examples"} for w in rows[start:start + length]]
-        return {"view": "words", "filtered": len(rows), "rows": page, "summary": _summary(analysis)}
+        return analysis, rows, summary
 
-    rows = [r for r in analysis["sentences"] if r["score"] >= threshold]
+    rows = {"open": open_rows, "ok": [r for r in analysis["sentences"] if r["ok"]],
+            "all": analysis["sentences"]}[status]
+    rows = [r for r in rows if r["score"] >= threshold]
     if kind:
         rows = [r for r in rows if any(f["kind"] == kind for f in r["issues"])]
     if side:
@@ -268,14 +311,92 @@ async def review_overview(project_id, view="sentences", start=0, length=25, sear
                     or any(needle in f["word"] for f in r["issues"])):
                 hits.append(r)
         rows = hits
+    return analysis, rows, summary
+
+
+async def review_overview(project_id, view="sentences", start=0, length=25, search="",
+                          min_level="medium", kind="", side="", status="open"):
+    """One page of the sentence or word list, plus the summary of the whole project."""
+    analysis, rows, summary = await _filtered(project_id, view, search, min_level, kind, side, status)
+    start, length = max(0, int(start or 0)), max(1, min(200, int(length or 25)))
     page = rows[start:start + length]
+    if view == "words":
+        page = [{k: v for k, v in w.items() if k != "examples"} for w in page]
+        return {"view": "words", "filtered": len(rows), "rows": page, "summary": summary}
+    _, cursor = get_db()
     texts = _load_rows(cursor, project_id, [r["row_id"] for r in page])
     return {
         "view": "sentences",
         "filtered": len(rows),
         "rows": [_sentence_view(r, *texts.get(r["row_id"], ("", ""))) for r in page],
-        "summary": _summary(analysis),
+        "summary": summary,
     }
+
+
+async def review_export(project_id, view="sentences", search="", min_level="medium", kind="", side="",
+                        status="open"):
+    """Every entry matching the filters, as plain records for a CSV or JSON file."""
+    from text import detokenise
+    analysis, rows, _ = await _filtered(project_id, view, search, min_level, kind, side, status)
+    if view == "words":
+        return [{"side": w["side"], "word": w["word"], "status": "ok" if w["ok"] else "open",
+                 "without_translation": w["flagged"], "sentences": w["sentences"],
+                 "usually_translated": None if w["rate"] is None else round(w["rate"], 4),
+                 "usual_translations": " | ".join(w["expected"])} for w in rows]
+    _, cursor = get_db()
+    out = []
+    ids = [r["row_id"] for r in rows]
+    texts = {}
+    for i in range(0, len(ids), 500):
+        texts.update(_load_rows(cursor, project_id, ids[i:i + 500]))
+    for r in rows:
+        line1, line2 = texts.get(r["row_id"], ("", ""))
+        out.append({
+            "line": r["row_id"] + 1, "level": r["level"], "score": round(r["score"], 3),
+            "status": "ok" if r["ok"] else "open",
+            "issues": "; ".join(describe(f) for f in r["issues"]),
+            "source": detokenise(line1 or ""), "target": detokenise(line2 or ""),
+        })
+    return out
+
+
+def mark_pairs(project_id, row_ids, ok=True):
+    """Mark sentence pairs OK (for their current text), or remove the mark. Returns the number changed."""
+    conn, cursor = get_db()
+    row_ids = [int(r) for r in row_ids]
+    if not ok:
+        for r in row_ids:
+            cursor.execute("DELETE FROM review_marks WHERE project_id=? AND row_id=?", (project_id, r))
+        conn.commit()
+        return len(row_ids)
+    texts = {}
+    for i in range(0, len(row_ids), 500):
+        texts.update(_load_rows(cursor, project_id, row_ids[i:i + 500]))
+    cursor.executemany(
+        "INSERT OR REPLACE INTO review_marks (project_id, row_id, status, text_hash, created_at) "
+        "VALUES (?, ?, 'ok', ?, CURRENT_TIMESTAMP)",
+        [(project_id, r, text_hash(*texts[r])) for r in row_ids if r in texts])
+    conn.commit()
+    return sum(1 for r in row_ids if r in texts)
+
+
+async def mark_all(project_id, search="", min_level="medium", kind="", side="", ok=True):
+    """Mark every open pair matching the filters OK (or every OK pair open again)."""
+    _, rows, _ = await _filtered(project_id, "sentences", search, min_level, kind, side, "open" if ok else "ok")
+    return mark_pairs(project_id, [r["row_id"] for r in rows], ok)
+
+
+def mark_word(project_id, side, word, ok=True):
+    conn, cursor = get_db()
+    side = "tgt" if side == "tgt" else "src"
+    if ok:
+        cursor.execute("INSERT OR IGNORE INTO review_ok_words (project_id, side, word) VALUES (?, ?, ?)",
+                       (project_id, side, word))
+    else:
+        cursor.execute("DELETE FROM review_ok_words WHERE project_id=? AND side=? AND word=?",
+                       (project_id, side, word))
+    conn.commit()
+    return True
 
 
 async def word_examples(project_id, side, word):

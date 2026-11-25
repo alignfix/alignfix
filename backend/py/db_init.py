@@ -98,6 +98,27 @@ CREATE TABLE IF NOT EXISTS ignored (
 )
 """)
 
+# Review: sentence pairs and words a person checked and accepted. A pair mark
+# holds a hash of the text it was given for: once the text changes, it lapses.
+c.execute("""
+CREATE TABLE IF NOT EXISTS review_marks (
+    project_id INTEGER,
+    row_id INTEGER,
+    status TEXT DEFAULT 'ok',
+    text_hash TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (project_id, row_id)
+)
+""")
+c.execute("""
+CREATE TABLE IF NOT EXISTS review_ok_words (
+    project_id INTEGER,
+    side TEXT,
+    word TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (project_id, side, word)
+)
+""")
 c.execute("""
 CREATE INDEX IF NOT EXISTS idx_phrases_lookup
 ON phrases (src_phrase, tgt_phrase, direction, project_id)

@@ -109,7 +109,8 @@ export async function showDeleteConfirm(message, title = 'Delete', confirmLabel 
 
 /**
  * Short notification in the corner of the page. type: success, info,
- * warning or danger. options.action = { label, href } adds a link;
+ * warning or danger. options.action = { label, href } adds a link,
+ * { label, onClick } a button;
  * options.delay in ms (errors stay until closed).
  */
 export function toast(message, type = 'info', options = {}) {
@@ -125,9 +126,10 @@ export function toast(message, type = 'info', options = {}) {
   const el = document.createElement('div');
   el.className = `toast align-items-center border-0 toast-${type}`;
   el.setAttribute('role', type === 'danger' ? 'alert' : 'status');
-  const action = options.action
-    ? `<a class="btn btn-sm btn-light ms-2 toast-action" href="${escapeHtml(options.action.href)}">${escapeHtml(options.action.label)}</a>`
-    : '';
+  const action = !options.action ? ''
+    : options.action.onClick
+      ? `<button type="button" class="btn btn-sm btn-light ms-2 toast-action">${escapeHtml(options.action.label)}</button>`
+      : `<a class="btn btn-sm btn-light ms-2 toast-action" href="${escapeHtml(options.action.href)}">${escapeHtml(options.action.label)}</a>`;
   el.innerHTML = `
     <div class="d-flex align-items-center">
       <div class="toast-body d-flex align-items-start gap-2">
@@ -142,7 +144,10 @@ export function toast(message, type = 'info', options = {}) {
   const sticky = type === 'danger' && options.delay === undefined;
   const t = new bootstrap.Toast(el, { autohide: !sticky, delay: options.delay || 6000 });
   el.addEventListener('hidden.bs.toast', () => { t.dispose(); el.remove(); });
-  el.querySelector('.toast-action')?.addEventListener('click', () => t.hide());
+  el.querySelector('.toast-action')?.addEventListener('click', () => {
+    t.hide();
+    options.action.onClick?.();
+  });
   t.show();
   return t;
 }

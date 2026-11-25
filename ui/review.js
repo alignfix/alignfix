@@ -21,10 +21,12 @@
  * their usual translation, with a detail pane explaining every issue.
  */
 
-import { fetchReviewOverview, fetchWordExamples, downloadPhraseTable } from "../backend/js/review.js";
+import { fetchReviewOverview, fetchWordExamples, downloadPhraseTable, markPairs, markAllPairs, markWord,
+  downloadReview } from "../backend/js/review.js";
+import { getProject } from "../backend/js/projects.js";
 import { ignorePhrasePair } from "../backend/js/phrases.js";
 import { runActivity, isBusy } from "./activity.js";
-import { toast } from "./dialogs.js";
+import { toast, showConfirm } from "./dialogs.js";
 import { escapeHtml, reportError, formatCount } from "./utils.js";
 
 const PAGE_SIZE = 20;
@@ -44,6 +46,7 @@ export async function renderReview(projectId, params = new URLSearchParams()) {
     level: ["high", "medium", "low"].includes(params.get("level")) ? params.get("level") : "medium",
     kind: params.get("kind") || "",
     side: ["src", "tgt"].includes(params.get("side")) ? params.get("side") : "",
+    status: ["open", "ok", "all"].includes(params.get("status")) ? params.get("status") : "open",
     start: 0,
     rows: [],
     selected: null,
@@ -68,10 +71,14 @@ export async function renderReview(projectId, params = new URLSearchParams()) {
         </div>
         <div class="dropdown">
           <button class="btn btn-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
-            <i class="fas fa-file-export me-1"></i>Export phrase table
+            <i class="fas fa-file-export me-1"></i>Export
           </button>
           <ul class="dropdown-menu dropdown-menu-end">
-            <li><h6 class="dropdown-header">Extracted phrase pairs per source phrase:<br>top translation, its share, alternatives</h6></li>
+            <li><h6 class="dropdown-header">This list, all pages, with the current filters</h6></li>
+            <li><button class="dropdown-item review-export-btn" data-format="csv"><i class="fas fa-file-csv fa-fw me-1"></i>Review list (CSV)</button></li>
+            <li><button class="dropdown-item review-export-btn" data-format="json"><i class="fas fa-file-code fa-fw me-1"></i>Review list (JSON)</button></li>
+            <li><hr class="dropdown-divider"></li>
+            <li><h6 class="dropdown-header">Phrase table: extracted phrase pairs per source phrase,<br>top translation, its share, alternatives</h6></li>
             <li><button class="dropdown-item export-btn" data-format="csv" data-part="all">All phrases (CSV)</button></li>
             <li><button class="dropdown-item export-btn" data-format="json" data-part="all">All phrases (JSON)</button></li>
             <li><hr class="dropdown-divider"></li>
@@ -128,6 +135,11 @@ export async function renderReview(projectId, params = new URLSearchParams()) {
               <select class="form-select form-select-sm w-auto sentences-only" id="review-kind" aria-label="Issue type">
                 <option value="">All types</option>
               </select>
+              <select class="form-select form-select-sm w-auto" id="review-status" aria-label="Status">
+                <option value="open">To review</option>
+                <option value="ok">Marked OK</option>
+                <option value="all">All</option>
+              </select>
               <select class="form-select form-select-sm w-auto" id="review-side" aria-label="Side">
                 <option value="">Both sides</option>
                 <option value="src">Source</option>
@@ -138,8 +150,11 @@ export async function renderReview(projectId, params = new URLSearchParams()) {
           <div id="review-list" class="review-list" role="listbox" aria-label="Issues">
             <div class="text-center text-muted py-5"><span class="spinner-border spinner-border-sm me-2"></span>Checking the translations…</div>
           </div>
-          <div class="card-footer d-flex justify-content-between align-items-center small">
+          <div class="card-footer d-flex flex-wrap gap-2 justify-content-between align-items-center small">
             <span class="text-muted" id="review-info"></span>
+            <button class="btn btn-sm btn-outline-secondary ms-auto sentences-only" id="review-mark-all" type="button"
+                    title="Mark every pair in this list (all pages) as checked and OK">
+              <i class="fas fa-check-double me-1"></i>Mark all OK</button>
             <div class="btn-group btn-group-sm">
               <button class="btn btn-secondary" id="review-prev" aria-label="Previous page"><i class="fas fa-chevron-left"></i></button>
               <button class="btn btn-secondary" id="review-next" aria-label="Next page"><i class="fas fa-chevron-right"></i></button>
@@ -158,6 +173,7 @@ export async function renderReview(projectId, params = new URLSearchParams()) {
     </div>`;
 
   document.getElementById("review-level").value = state.level;
+  document.getElementById("review-status").value = state.status;
   document.getElementById("review-side").value = state.side;
   bindControls();
   syncViewControls();
@@ -177,6 +193,7 @@ async function load({ first = false } = {}) {
     min_level: state.level,
     kind: state.kind,
     side: state.side,
+    status: state.status,
   };
   let result;
   try {
@@ -201,7 +218,39 @@ async function load({ first = false } = {}) {
   renderList(result);
   const same = (a, b) => a && b && (state.view === "words" ? a.word === b.word && a.side === b.side : a.row_id === b.row_id);
   const keep = state.selected && state.rows.find(r => same(r, state.selected));
-  select(keep || state.rows[0] || null);
+  const at = Number.isInteger(state.selectIndex) ? state.rows[Math.min(state.selectIndex, state.rows.length - 1)] : null;
+  state.selectIndex = null;
+  select(keep || at || state.rows[0] || null);
+}
+
+// shown filters, for the bridge calls
+function currentFilters() {
+  return { project_id: state.projectId, view: state.view, search: state.search, min_level: state.level,
+           kind: state.kind, side: state.side, status: state.status };
+}
+
+/** Mark the selected sentence pair or word OK (or remove the mark) and go on with the next entry. */
+async function toggleOk(row, ok) {
+  if (!row) return;
+  const index = state.rows.indexOf(row);
+  try {
+    if (state.view === "words") await markWord(state.projectId, row.side, row.word, ok);
+    else await markPairs(state.projectId, [row.row_id], ok);
+  } catch (err) {
+    reportError(err);
+    return;
+  }
+  const what = state.view === "words" ? `“${row.word}”` : `Line ${formatCount(row.row_id + 1)}`;
+  toast(ok ? `${what} marked OK.` : `${what} is back in the list to review.`, "success", {
+    action: { label: "Undo", onClick: () => toggleOk(row, !ok) },
+  });
+  // the entry leaves this list unless it shows both: select the one after it
+  if (state.status !== "all") {
+    state.selected = null;
+    state.selectIndex = Math.max(0, index);
+  }
+  await load();
+  document.querySelector(`#review-list [data-index="${state.rows.indexOf(state.selected)}"]`)?.focus();
 }
 
 function syncViewControls() {
@@ -219,6 +268,34 @@ function bindControls() {
   document.getElementById("review-level").addEventListener("change", (e) => { state.level = e.target.value; reload(); });
   document.getElementById("review-kind").addEventListener("change", (e) => { state.kind = e.target.value; reload(); });
   document.getElementById("review-side").addEventListener("change", (e) => { state.side = e.target.value; reload(); });
+  document.getElementById("review-status").addEventListener("change", (e) => {
+    state.status = e.target.value; state.selected = null; reload();
+  });
+  document.getElementById("review-mark-all").addEventListener("click", async () => {
+    const n = state.status === "ok" ? 0 : state.filteredOpen;
+    if (!n) { toast("No pair in this list is left to mark.", "info"); return; }
+    const ok = await showConfirm(`Mark all ${formatCount(n)} sentence pairs in this list (all pages) as OK? ` +
+      "They leave the list to review until their text changes.", "Mark all OK", { confirmLabel: "Mark all OK" });
+    if (!ok) return;
+    try {
+      const done = await markAllPairs(currentFilters());
+      toast(`${formatCount(done)} sentence pairs marked OK.`, "success");
+      state.selected = null; state.start = 0;
+      await load();
+    } catch (err) {
+      reportError(err);
+    }
+  });
+  document.querySelectorAll(".review-export-btn").forEach(btn => btn.addEventListener("click", async () => {
+    try {
+      const project = await getProject(state.projectId).catch(() => null);
+      const n = await downloadReview(currentFilters(), btn.dataset.format, project?.name);
+      if (n) toast(`Exported ${formatCount(n)} ${state.view === "words" ? "words" : "sentence pairs"}.`, "success");
+      else toast("The list is empty, so nothing was exported.", "info");
+    } catch (err) {
+      reportError(err);
+    }
+  }));
   document.querySelectorAll('input[name="review-view"]').forEach(input => input.addEventListener("change", (e) => {
     state.view = e.target.value; state.selected = null; syncViewControls(); reload();
   }));
@@ -241,6 +318,13 @@ function bindControls() {
     if (e.key === "ArrowDown") next = index + 1;
     else if (e.key === "ArrowUp") next = index - 1;
     else if (e.key === "Enter" || e.key === " ") { select(state.rows[index]); e.preventDefault(); return; }
+    else if ((e.key === "o" || e.key === "O") && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      // o: mark OK (or, for an entry marked OK, put it back)
+      const row = state.rows[index];
+      e.preventDefault();
+      toggleOk(row, !row.ok);
+      return;
+    }
     if (next !== null && state.rows[next]) {
       e.preventDefault();
       select(state.rows[next]);
@@ -292,7 +376,8 @@ function renderSummary(s) {
   document.getElementById("review-summary").innerHTML = [
     statCard("High", formatCount(s.high), `likely errors${share(s.high)}`, s.high ? "stat-warning" : "stat-ok"),
     statCard("Medium", formatCount(s.medium), `worth a look${share(s.medium)}`),
-    statCard("Checked", formatCount(s.checked), `sentence pairs; ${formatCount(s.low)} more with minor issues`),
+    statCard("Checked", formatCount(s.checked), `sentence pairs; ${formatCount(s.low)} more with minor issues` +
+      (s.ok ? `; ${formatCount(s.ok)} marked OK` : "")),
     statCard("Words", formatCount(s.words), "words that sometimes lack their usual translation"),
   ].join("");
 }
@@ -375,7 +460,8 @@ function levelBadge(level) {
 function renderList(result) {
   const list = document.getElementById("review-list");
   if (!result.rows.length) {
-    const hint = state.view === "sentences" && state.level !== "low" ? " Choose “All” to include minor issues." : "";
+    const hint = state.status === "ok" ? " Nothing is marked OK with these filters."
+      : state.view === "sentences" && state.level !== "low" ? " Choose “All” to include minor issues." : "";
     list.innerHTML = `<div class="empty-state"><i class="fas fa-circle-check"></i><p class="mb-0">Nothing found.${escapeHtml(hint)}</p></div>`;
   } else if (state.view === "sentences") {
     list.innerHTML = result.rows.map((r, i) => {
@@ -383,7 +469,8 @@ function renderList(result) {
       return `
       <div class="review-item" data-index="${i}" tabindex="0" role="option">
         <div class="d-flex justify-content-between align-items-center mb-1">
-          <span>${levelBadge(r.level)} <span class="text-muted small ms-1">line ${formatCount(r.row_id + 1)}</span></span>
+          <span>${levelBadge(r.level)}${r.ok ? ` <span class="level-badge level-ok"><i class="fas fa-check me-1"></i>OK</span>` : ""}
+            <span class="text-muted small ms-1">line ${formatCount(r.row_id + 1)}</span></span>
           <span class="text-muted small tabular" title="issue score">${r.score.toFixed(1)}</span>
         </div>
         <div class="review-text"><span class="side-badge side-src">SRC</span> ${segmentsHtml(r.src)}</div>
@@ -405,13 +492,16 @@ function renderList(result) {
         </tr></thead>
         <tbody>${result.rows.map((w, i) => `
           <tr data-index="${i}" tabindex="0">
-            <td class="fw-semibold"><span class="side-badge side-${w.side}">${w.side === "src" ? "SRC" : "TGT"}</span> ${escapeHtml(w.word)}</td>
-            <td class="text-end tabular">${formatCount(w.flagged)} <span class="text-muted small">/ ${formatCount(w.sentences)}</span></td>
-            <td class="text-end tabular">${pct(w.rate)}</td>
+            <td class="fw-semibold"><span class="side-badge side-${w.side}">${w.side === "src" ? "SRC" : "TGT"}</span> ${escapeHtml(w.word)}${w.ok ? ` <span class="level-badge level-ok ms-1"><i class="fas fa-check me-1"></i>OK</span>` : ""}</td>
+            <td class="text-end tabular">${w.ok ? "–" : `${formatCount(w.flagged)} <span class="text-muted small">/ ${formatCount(w.sentences)}</span>`}</td>
+            <td class="text-end tabular">${w.rate === null ? "–" : pct(w.rate)}</td>
             <td class="text-truncate" style="max-width: 14rem">${escapeHtml(w.expected.join(", "))}</td>
           </tr>`).join("")}</tbody>
       </table>`;
   }
+  state.filteredOpen = state.view === "sentences" && state.status !== "ok" ? result.filtered : 0;
+  const markAll = document.getElementById("review-mark-all");
+  if (markAll) markAll.disabled = !state.filteredOpen;
   const end = Math.min(result.filtered, state.start + result.rows.length);
   const what = state.view === "words" ? "words" : "sentence pairs";
   document.getElementById("review-info").textContent = result.filtered
@@ -462,9 +552,10 @@ function showSentence(row, pane) {
   pane.innerHTML = `
     <div class="card-header d-flex justify-content-between align-items-center">
       <h5 class="card-title mb-0">Line ${formatCount(row.row_id + 1)}</h5>
-      ${levelBadge(row.level)}
+      <span>${row.ok ? `<span class="level-badge level-ok me-1"><i class="fas fa-check me-1"></i>OK</span>` : ""}${levelBadge(row.level)}</span>
     </div>
     <div class="card-body">
+      ${okButtons(row, "pair")}
       <div class="panel-label">Source</div>
       <p class="review-text mb-3">${segmentsHtml(row.src)}</p>
       <div class="panel-label">Target</div>
@@ -476,8 +567,30 @@ function showSentence(row, pane) {
     </div>`;
 }
 
+function okButtons(row, what) {
+  return row.ok
+    ? `<div class="ok-bar ok-bar-done mb-3"><span><i class="fas fa-circle-check me-1"></i>Marked OK: not in the list to review.</span>
+         <button class="btn btn-sm btn-secondary ok-btn" data-ok="0" title="Put it back in the list to review (o)">
+           <i class="fas fa-rotate-left me-1"></i>Undo</button></div>`
+    : `<div class="ok-bar mb-3"><span class="small text-muted">${what === "pair" ? "Checked and the translation is fine?" : "Is this word fine as it is translated?"}</span>
+         <button class="btn btn-sm btn-success ok-btn" data-ok="1" title="Remove it from the list to review (o)">
+           <i class="fas fa-check me-1"></i>Mark OK</button></div>`;
+}
+
 async function showWord(row, pane) {
   const other = row.side === "src" ? "target" : "source";
+  if (row.ok) {
+    pane.innerHTML = `
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="card-title mb-0 text-break"><span class="side-badge side-${row.side}">${row.side === "src" ? "SRC" : "TGT"}</span> ${escapeHtml(row.word)}</h5>
+        <span class="level-badge level-ok"><i class="fas fa-check me-1"></i>OK</span>
+      </div>
+      <div class="card-body">
+        ${okButtons(row, "word")}
+        <p class="small mb-0">Words marked OK are not flagged in any sentence pair. They stay in the phrase table.</p>
+      </div>`;
+    return;
+  }
   pane.innerHTML = `
     <div class="card-header d-flex justify-content-between align-items-center">
       <h5 class="card-title mb-0 text-break"><span class="side-badge side-${row.side}">${row.side === "src" ? "SRC" : "TGT"}</span> ${escapeHtml(row.word)}</h5>
@@ -488,6 +601,8 @@ async function showWord(row, pane) {
         a usual translation appears on the ${other} side in <strong>${pct(row.rate)}</strong> of its sentence pairs.
         In the pairs below, none does: the word may be untranslated, mistranslated${row.side === "tgt" ? " or added" : ""}.</p>
       <div class="d-flex flex-wrap gap-2 mb-3">
+        <button class="btn btn-success btn-sm ok-btn" data-ok="1" title="Do not flag this word any more; it stays in the phrase table (o)">
+          <i class="fas fa-check me-1"></i>Mark word OK</button>
         <a class="btn btn-primary btn-sm" href="${escapeHtml(phrasesLink(row.side, row.word))}"><i class="fas fa-search me-1"></i>All sentences</a>
         <button class="btn btn-secondary btn-sm hide-word-btn" title="Hide this word in the phrase table and in this review">
           <i class="fas fa-eye-slash me-1"></i>Hide word</button>
@@ -515,6 +630,12 @@ async function showWord(row, pane) {
 
 async function onDetailClick(e) {
   const row = state.selected;
+  const okBtn = e.target.closest(".ok-btn");
+  if (row && okBtn) {
+    okBtn.disabled = true;
+    await toggleOk(row, okBtn.dataset.ok === "1");
+    return;
+  }
   const btn = e.target.closest(".hide-word-btn");
   if (!row || !btn) return;
   btn.disabled = true;
@@ -552,6 +673,11 @@ function renderSidebar() {
     <h6>Severity</h6>
     <p><strong>High</strong> pairs are likely errors, <strong>medium</strong> ones worth a look. Fix them
       on the Phrases page (<em>Sentences with …</em> opens it with the word searched).</p>
-    <p class="mb-0"><strong>Words</strong> lists the words that most often lack their translation, with
-      their worst cases. <strong>Hide word</strong> excludes a word here and in the phrase table.</p>`;
+    <p><strong>Words</strong> lists the words that most often lack their translation, with
+      their worst cases. <strong>Hide word</strong> excludes a word here and in the phrase table.</p>
+    <h6>Marking OK</h6>
+    <p><strong>Mark OK</strong> (or the <kbd>o</kbd> key in the list) takes a pair you checked out of the list
+      to review; it comes back if its text changes. A word marked OK is not flagged any more but stays in the
+      phrase table. <em>Marked OK</em> in the status filter lists them, with <strong>Undo</strong>.</p>
+    <p class="mb-0"><strong>Export</strong> saves the list with the current filters, all pages, as CSV or JSON.</p>`;
 }

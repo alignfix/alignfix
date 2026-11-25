@@ -17,16 +17,19 @@
 /* Translation issues review and phrase table export (backend/py/review.py). */
 
 import { initPyodide } from "../../pyodide.js";
-import { downloadBlob } from "./utils.js";
+import { downloadBlob, safeFilename } from "./utils.js";
 
 async function callReview(fn, args) {
   const pyodide = await initPyodide();
   pyodide.globals.set("rv_args", pyodide.toPy(args));
   try {
     const json = await pyodide.runPythonAsync(`
-import json
+import json, inspect
 import review
-json.dumps(await review.${fn}(**rv_args), ensure_ascii=False)
+rv_result = review.${fn}(**rv_args)
+if inspect.isawaitable(rv_result):
+    rv_result = await rv_result
+json.dumps(rv_result, ensure_ascii=False)
 `);
     return JSON.parse(json);
   } finally {
@@ -34,22 +37,71 @@ json.dumps(await review.${fn}(**rv_args), ensure_ascii=False)
   }
 }
 
-/**
- * One page of the issue list with the project summary.
- * params: project_id, view ('sentences'|'words'), start, length, search,
- * min_level ('high'|'medium'|'low'), kind, side ('src'|'tgt'|'').
- */
-export function fetchReviewOverview(params) {
-  return callReview("review_overview", {
+function filters(params) {
+  return {
     project_id: parseInt(params.project_id),
-    view: params.view === "words" ? "words" : "sentences",
-    start: parseInt(params.start) || 0,
-    length: parseInt(params.length) || 25,
     search: String(params.search || ""),
     min_level: ["high", "medium", "low"].includes(params.min_level) ? params.min_level : "medium",
     kind: String(params.kind || ""),
     side: ["src", "tgt"].includes(params.side) ? params.side : "",
+  };
+}
+
+const STATUSES = ["open", "ok", "all"];
+
+/**
+ * One page of the issue list with the project summary.
+ * params: project_id, view ('sentences'|'words'), start, length, search,
+ * min_level ('high'|'medium'|'low'), kind, side ('src'|'tgt'|''),
+ * status ('open': not marked OK | 'ok' | 'all').
+ */
+export function fetchReviewOverview(params) {
+  return callReview("review_overview", {
+    ...filters(params),
+    view: params.view === "words" ? "words" : "sentences",
+    start: parseInt(params.start) || 0,
+    length: parseInt(params.length) || 25,
+    status: STATUSES.includes(params.status) ? params.status : "open",
   });
+}
+
+/** Mark sentence pairs OK (ok = false: remove the mark). Returns the number changed. */
+export function markPairs(project_id, rowIds, ok = true) {
+  return callReview("mark_pairs", { project_id: parseInt(project_id), row_ids: rowIds.map(Number), ok: !!ok });
+}
+
+/** Mark every open pair matching the filters OK. */
+export function markAllPairs(params) {
+  const { project_id, search, min_level, kind, side } = filters(params);
+  return callReview("mark_all", { project_id, search, min_level, kind, side, ok: true });
+}
+
+/** Mark a word OK: it is not flagged any more (it stays in the phrase table). */
+export function markWord(project_id, side, word, ok = true) {
+  return callReview("mark_word", {
+    project_id: parseInt(project_id), side: side === "tgt" ? "tgt" : "src", word: String(word), ok: !!ok,
+  });
+}
+
+/**
+ * Download the entries matching the filters (all pages) as CSV or JSON.
+ * Returns the number of entries written.
+ */
+export async function downloadReview(params, format = "csv", projectName = "") {
+  const view = params.view === "words" ? "words" : "sentences";
+  const rows = await callReview("review_export", {
+    ...filters(params), view, status: STATUSES.includes(params.status) ? params.status : "open",
+  });
+  if (!rows.length) return 0;
+  const base = `${safeFilename(projectName, `project_${params.project_id}`)}_review_${view}`;
+  if (format === "json") {
+    downloadBlob(new Blob([JSON.stringify(rows, null, 2)], { type: "application/json" }), `${base}.json`);
+  } else {
+    const header = Object.keys(rows[0]);
+    const csv = [header.join(","), ...rows.map(r => header.map(k => csvCell(r[k])).join(","))].join("\n");
+    downloadBlob(new Blob(["\ufeff" + csv + "\n"], { type: "text/csv;charset=utf-8" }), `${base}.csv`);
+  }
+  return rows.length;
 }
 
 /** The flagged sentence pairs of one word. */

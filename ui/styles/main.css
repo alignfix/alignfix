@@ -1812,3 +1812,37 @@ div.dt-scroll-body {
         display: none;
     }
 }
+
+/* ---- Review: marked OK */
+.level-badge.level-ok {
+    background: rgba(26, 127, 75, .12);
+    color: var(--ok-text);
+}
+
+.ok-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: .5rem;
+    padding: .5rem .75rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface-2);
+}
+
+.ok-bar-done {
+    border-color: rgba(26, 127, 75, .35);
+    background: rgba(26, 127, 75, .07);
+    color: var(--ok-text);
+    font-size: .875rem;
+}
+
+kbd {
+    font-size: .75rem;
+    padding: .1rem .35rem;
+    background: var(--chip-bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: .25rem;
+}
