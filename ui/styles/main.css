@@ -169,9 +169,25 @@ body {
 
 .tgt-occurrence {
     /* UIBK Corporate Design Color */
-    background-color: #f39200;
+    background-color: var(--brand-orange);
     color: white;
     font-weight: bold;
+}
+
+/* dark mode: a coloured frame instead of a filled box, the text stays readable */
+[data-bs-theme="dark"] .src-occurrence,
+[data-bs-theme="dark"] .tgt-occurrence {
+    background-color: transparent;
+    color: inherit;
+    border: 2px solid var(--accent);
+    border-radius: .25rem;
+    padding: 0 .15em;
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
+}
+
+[data-bs-theme="dark"] .tgt-occurrence {
+    border-color: var(--brand-orange);
 }
 span.score {
     color: var(--text-soft);
