@@ -221,10 +221,12 @@ async def _apply_glossary(project_id, cursor, terms, confirmed, found_by_row):
         found, hashed = found_by_row.get(row_id, ([], None))
         kept = []
         for f in found:
-            other = "tgt" if f["side"] == "src" else "src"
-            ok = confirmed[f["side"]].get(f["word"])
-            if f["kind"] in ("missing", "unexplained") and ok and not ok.isdisjoint(stems[other]):
-                continue
+            # only word issues have a side; length and copy issues concern the whole pair
+            if f["kind"] in ("missing", "unexplained") and f["side"] in confirmed:
+                other = "tgt" if f["side"] == "src" else "src"
+                ok = confirmed[f["side"]].get(f["word"])
+                if ok and not ok.isdisjoint(stems[other]):
+                    continue
             kept.append(f)
         for side, other in (("src", "tgt"), ("tgt", "src")):
             for start, term in _term_positions(toks[side], terms[side]):
