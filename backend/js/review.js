@@ -86,13 +86,6 @@ export function markAllPairs(params) {
   return callReview("mark_all", { project_id, search, min_level, kind, side, ok: true }, { write: true });
 }
 
-/** Mark a word OK: it is not flagged any more (it stays in the phrase table). */
-export function markWord(project_id, side, word, ok = true) {
-  return callReview("mark_word", {
-    project_id: parseInt(project_id), side: side === "tgt" ? "tgt" : "src", word: String(word), ok: !!ok,
-  }, { write: true });
-}
-
 /**
  * Download the entries matching the filters (all pages) as CSV or JSON.
  * Returns the number of entries written.

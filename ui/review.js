@@ -21,8 +21,9 @@
  * their usual translation, with a detail pane explaining every issue.
  */
 
-import { fetchReviewOverview, fetchWordExamples, downloadPhraseTable, markPairs, markAllPairs, markWord,
+import { fetchReviewOverview, fetchWordExamples, downloadPhraseTable, markPairs, markAllPairs,
   downloadReview } from "../backend/js/review.js";
+import { addGlossaryPairs, removeGlossaryTerm } from "../backend/js/glossary.js";
 import { getProject } from "../backend/js/projects.js";
 import { ignorePhrasePair } from "../backend/js/phrases.js";
 import { runActivity, isBusy } from "./activity.js";
@@ -229,20 +230,36 @@ function currentFilters() {
            kind: state.kind, side: state.side, status: state.status };
 }
 
-/** Mark the selected sentence pair or word OK (or remove the mark) and go on with the next entry. */
-async function toggleOk(row, ok) {
+/**
+ * Mark the selected sentence pair OK (or remove the mark), or add the selected word to
+ * the glossary with the given translations (ok = false: remove it); then go on with
+ * the next entry.
+ */
+async function toggleOk(row, ok, translations = null) {
   if (!row) return;
   const index = state.rows.indexOf(row);
+  const words = state.view === "words";
+  let message;
   try {
-    if (state.view === "words") await markWord(state.projectId, row.side, row.word, ok);
-    else await markPairs(state.projectId, [row.row_id], ok);
+    if (words && ok) {
+      const tr = (translations || row.expected || []).filter(Boolean);
+      if (!tr.length) { toast("Choose or type at least one translation.", "warning"); return; }
+      await addGlossaryPairs(state.projectId, tr.map(t => (row.side === "src" ? [row.word, t] : [t, row.word])), "review");
+      message = `“${row.word}” ↔ “${tr.join("”, “")}” added to the glossary.`;
+      translations = tr;
+    } else if (words) {
+      await removeGlossaryTerm(state.projectId, row.side, row.word);
+      message = `“${row.word}” removed from the glossary.`;
+    } else {
+      await markPairs(state.projectId, [row.row_id], ok);
+      message = ok ? `Line ${formatCount(row.row_id + 1)} marked OK.` : `Line ${formatCount(row.row_id + 1)} is back in the list to review.`;
+    }
   } catch (err) {
     reportError(err);
     return;
   }
-  const what = state.view === "words" ? `“${row.word}”` : `Line ${formatCount(row.row_id + 1)}`;
-  toast(ok ? `${what} marked OK.` : `${what} is back in the list to review.`, "success", {
-    action: { label: "Undo", onClick: () => toggleOk(row, !ok) },
+  toast(message, "success", {
+    action: { label: "Undo", onClick: () => toggleOk(row, !ok, translations) },
   });
   // the entry leaves this list unless it shows both: select the one after it
   if (state.status !== "all") {
@@ -255,6 +272,8 @@ async function toggleOk(row, ok) {
 
 function syncViewControls() {
   document.querySelectorAll(".sentences-only").forEach(el => { el.hidden = state.view !== "sentences"; });
+  const status = document.getElementById("review-status");
+  if (status) status.options[1].text = state.view === "words" ? "In glossary" : "Marked OK";
   document.getElementById("review-search").placeholder = state.view === "words" ? "Word or translation" : "Word or text";
 }
 
@@ -356,6 +375,7 @@ function bindControls() {
     }
   }));
   document.getElementById("review-detail").addEventListener("click", onDetailClick);
+  document.getElementById("review-detail").addEventListener("submit", onDetailSubmit);
 }
 
 // ------------------------------------------------------------------ rendering
@@ -378,7 +398,8 @@ function renderSummary(s) {
     statCard("Medium", formatCount(s.medium), `worth a look${share(s.medium)}`),
     statCard("Checked", formatCount(s.checked), `sentence pairs; ${formatCount(s.low)} more with minor issues` +
       (s.ok ? `; ${formatCount(s.ok)} marked OK` : "")),
-    statCard("Words", formatCount(s.words), "words that sometimes lack their usual translation"),
+    statCard("Words", formatCount(s.words), "words that sometimes lack their usual translation" +
+      (s.glossary_terms ? `; ${formatCount(s.glossary_terms)} in the glossary` : "")),
   ].join("");
 }
 
@@ -460,7 +481,8 @@ function levelBadge(level) {
 function renderList(result) {
   const list = document.getElementById("review-list");
   if (!result.rows.length) {
-    const hint = state.status === "ok" ? " Nothing is marked OK with these filters."
+    const hint = state.status === "ok"
+      ? (state.view === "words" ? " The glossary is empty, or nothing in it matches." : " Nothing is marked OK with these filters.")
       : state.view === "sentences" && state.level !== "low" ? " Choose “All” to include minor issues." : "";
     list.innerHTML = `<div class="empty-state"><i class="fas fa-circle-check"></i><p class="mb-0">Nothing found.${escapeHtml(hint)}</p></div>`;
   } else if (state.view === "sentences") {
@@ -492,7 +514,7 @@ function renderList(result) {
         </tr></thead>
         <tbody>${result.rows.map((w, i) => `
           <tr data-index="${i}" tabindex="0">
-            <td class="fw-semibold"><span class="side-badge side-${w.side}">${w.side === "src" ? "SRC" : "TGT"}</span> ${escapeHtml(w.word)}${w.ok ? ` <span class="level-badge level-ok ms-1"><i class="fas fa-check me-1"></i>OK</span>` : ""}</td>
+            <td class="fw-semibold"><span class="side-badge side-${w.side}">${w.side === "src" ? "SRC" : "TGT"}</span> ${escapeHtml(w.word)}${w.ok ? ` <span class="level-badge level-ok ms-1" title="in the glossary"><i class="fas fa-book me-1"></i>glossary</span>` : ""}</td>
             <td class="text-end tabular">${w.ok ? "–" : `${formatCount(w.flagged)} <span class="text-muted small">/ ${formatCount(w.sentences)}</span>`}</td>
             <td class="text-end tabular">${w.rate === null ? "–" : pct(w.rate)}</td>
             <td class="text-truncate" style="max-width: 14rem">${escapeHtml(w.expected.join(", "))}</td>
@@ -568,6 +590,28 @@ function showSentence(row, pane) {
 }
 
 function okButtons(row, what) {
+  if (what === "word") {
+    return row.ok
+      ? `<div class="ok-bar ok-bar-done mb-3"><span><i class="fas fa-book me-1"></i>In the glossary with <strong>${escapeHtml(row.expected.join(", "))}</strong>.</span>
+           <button class="btn btn-sm btn-secondary ok-btn" data-ok="0" title="Remove it from the glossary (o)">
+             <i class="fas fa-trash-can me-1"></i>Remove</button></div>`
+      : `<form class="glossary-add mb-3" id="glossary-add">
+           <div class="panel-label mb-1">Add to the glossary</div>
+           <div class="small text-muted mb-2">Confirm the translations that are right. The word then leaves this list;
+             a pair with “${escapeHtml(row.word)}” but none of them is flagged.</div>
+           <div class="d-flex flex-wrap gap-2 mb-2">
+             ${row.expected.map((t, i) => `
+               <input type="checkbox" class="btn-check" id="gl-tr-${i}" value="${escapeHtml(t)}" checked autocomplete="off">
+               <label class="btn btn-sm btn-outline-primary" for="gl-tr-${i}">${escapeHtml(t)}</label>`).join("")}
+           </div>
+           <div class="input-group input-group-sm">
+             <input type="text" class="form-control" id="gl-tr-other" placeholder="Another translation (optional)"
+                    aria-label="Another translation">
+             <button class="btn btn-success" type="submit" title="Add the chosen translations to the glossary (o: all usual ones)">
+               <i class="fas fa-book me-1"></i>Add to glossary</button>
+           </div>
+         </form>`;
+  }
   return row.ok
     ? `<div class="ok-bar ok-bar-done mb-3"><span><i class="fas fa-circle-check me-1"></i>Marked OK: not in the list to review.</span>
          <button class="btn btn-sm btn-secondary ok-btn" data-ok="0" title="Put it back in the list to review (o)">
@@ -583,11 +627,13 @@ async function showWord(row, pane) {
     pane.innerHTML = `
       <div class="card-header d-flex justify-content-between align-items-center">
         <h5 class="card-title mb-0 text-break"><span class="side-badge side-${row.side}">${row.side === "src" ? "SRC" : "TGT"}</span> ${escapeHtml(row.word)}</h5>
-        <span class="level-badge level-ok"><i class="fas fa-check me-1"></i>OK</span>
+        <span class="level-badge level-ok"><i class="fas fa-book me-1"></i>glossary</span>
       </div>
       <div class="card-body">
         ${okButtons(row, "word")}
-        <p class="small mb-0">Words marked OK are not flagged in any sentence pair. They stay in the phrase table.</p>
+        <p class="small mb-0">A confirmed translation counts as a usual translation, and a sentence pair with
+          “${escapeHtml(row.word)}” but none of its confirmed translations on the other side is flagged.
+          The whole glossary is on the <a href="#project-${state.projectId}">Phrases</a> page.</p>
       </div>`;
     return;
   }
@@ -597,12 +643,11 @@ async function showWord(row, pane) {
       <span class="text-muted small tabular">${formatCount(row.flagged)} of ${formatCount(row.sentences)}</span>
     </div>
     <div class="card-body">
+      ${okButtons(row, "word")}
       <p class="small mb-3">Usually ${row.expected.length ? `translated as <strong>${escapeHtml(row.expected.join(", "))}</strong>` : "translated"}:
         a usual translation appears on the ${other} side in <strong>${pct(row.rate)}</strong> of its sentence pairs.
         In the pairs below, none does: the word may be untranslated, mistranslated${row.side === "tgt" ? " or added" : ""}.</p>
       <div class="d-flex flex-wrap gap-2 mb-3">
-        <button class="btn btn-success btn-sm ok-btn" data-ok="1" title="Do not flag this word any more; it stays in the phrase table (o)">
-          <i class="fas fa-check me-1"></i>Mark word OK</button>
         <a class="btn btn-primary btn-sm" href="${escapeHtml(phrasesLink(row.side, row.word))}"><i class="fas fa-search me-1"></i>All sentences</a>
         <button class="btn btn-secondary btn-sm hide-word-btn" title="Hide this word in the phrase table and in this review">
           <i class="fas fa-eye-slash me-1"></i>Hide word</button>
@@ -626,6 +671,16 @@ async function showWord(row, pane) {
   } catch (err) {
     reportError(err);
   }
+}
+
+function onDetailSubmit(e) {
+  if (e.target.id !== "glossary-add") return;
+  e.preventDefault();
+  const chosen = [...e.target.querySelectorAll(".btn-check:checked")].map(el => el.value);
+  const other = document.getElementById("gl-tr-other").value.trim();
+  if (other) chosen.push(other);
+  e.target.querySelector('button[type="submit"]').disabled = true;
+  toggleOk(state.selected, true, chosen);
 }
 
 async function onDetailClick(e) {
@@ -675,9 +730,11 @@ function renderSidebar() {
       on the Phrases page (<em>Sentences with …</em> opens it with the word searched).</p>
     <p><strong>Words</strong> lists the words that most often lack their translation, with
       their worst cases. <strong>Hide word</strong> excludes a word here and in the phrase table.</p>
-    <h6>Marking OK</h6>
+    <h6>Marking OK and the glossary</h6>
     <p><strong>Mark OK</strong> (or the <kbd>o</kbd> key in the list) takes a pair you checked out of the list
-      to review; it comes back if its text changes. A word marked OK is not flagged any more but stays in the
-      phrase table. <em>Marked OK</em> in the status filter lists them, with <strong>Undo</strong>.</p>
+      to review; it comes back if its text changes. <em>Marked OK</em> in the status filter lists them.</p>
+    <p>In <strong>Words</strong>, <strong>Add to glossary</strong> confirms a word with the translations you choose
+      (<kbd>o</kbd>: all usual ones). It leaves the list, and from then on a pair with the word but none of its
+      confirmed translations is flagged. Phrase pairs confirmed on the Phrases page are checked the same way.</p>
     <p class="mb-0"><strong>Export</strong> saves the list with the current filters, all pages, as CSV or JSON.</p>`;
 }

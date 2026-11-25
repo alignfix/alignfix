@@ -63,6 +63,7 @@ KIND_LABELS = {
     "repeated": "repeated words",
     "length": "unusual length ratio",
     "copy": "target is a copy of the source",
+    "glossary": "glossary translation missing",
 }
 
 
@@ -311,6 +312,10 @@ def describe(issue):
         where = "target" if kind == "missing" else "source"
         return (f"“{issue['word']}” usually has {('“' + usual + '”') if usual else 'a translation'} "
                 f"on the {where} side ({share} of its sentences), not here")
+    if kind == "glossary":
+        usual = "”, “".join(issue.get("expected") or [])
+        where = "target" if issue["side"] == "src" else "source"
+        return f"“{issue['word']}” is in the glossary with “{usual}”, which is not on the {where} side"
     if kind == "number":
         return f"the number {issue['word']} appears on the {'source' if issue['side'] == 'src' else 'target'} side only"
     if kind == "repeated":

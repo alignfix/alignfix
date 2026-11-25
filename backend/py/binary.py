@@ -101,12 +101,12 @@ def _pack_curation(project_id, row_ids) -> bytes:
     # marks travel only while they are valid; import gives them the hash of the imported text
     cursor.execute("SELECT row_id, status, text_hash, created_at FROM review_marks WHERE project_id=?", (project_id,))
     marks = [[r[0], r[1], r[3]] for r in cursor.fetchall() if current.get(r[0]) == r[2]]
-    cursor.execute("SELECT side, word, created_at FROM review_ok_words WHERE project_id=?", (project_id,))
-    ok_words = [list(r) for r in cursor.fetchall()]
+    cursor.execute("SELECT src, tgt, origin, created_at FROM glossary WHERE project_id=? ORDER BY id", (project_id,))
+    glossary_rows = [list(r) for r in cursor.fetchall()]
     cursor.execute("SELECT batch, row_id, action, reason, origin_row, old_line1, old_line2, new_line1, new_line2, "
                    "created_at FROM changes WHERE project_id=? ORDER BY id", (project_id,))
     changes = [list(r) for r in cursor.fetchall()]
-    body = json.dumps({"row_ids": row_ids or [], "raw_lines": raw, "marks": marks, "ok_words": ok_words,
+    body = json.dumps({"row_ids": row_ids or [], "raw_lines": raw, "marks": marks, "glossary": glossary_rows,
                        "changes": changes},
                       ensure_ascii=False).encode("utf-8")
     return CURATION_TAG + struct.pack('>I', len(body)) + body
@@ -131,8 +131,8 @@ def _save_curation(project_id, curation):
     cursor.executemany("INSERT OR REPLACE INTO review_marks (project_id, row_id, status, text_hash, created_at) "
                        "VALUES (?, ?, ?, ?, ?)",
                        [(project_id, m[0], m[1], hashes[m[0]], m[2]) for m in curation.get("marks", []) if m[0] in hashes])
-    cursor.executemany("INSERT OR IGNORE INTO review_ok_words (project_id, side, word, created_at) VALUES (?, ?, ?, ?)",
-                       [(project_id, *w) for w in curation.get("ok_words", [])])
+    cursor.executemany("INSERT OR IGNORE INTO glossary (project_id, src, tgt, origin, created_at) VALUES (?, ?, ?, ?, ?)",
+                       [(project_id, *g) for g in curation.get("glossary", [])])
     cursor.executemany(
         "INSERT OR IGNORE INTO changes (project_id, batch, row_id, action, reason, origin_row, old_line1, old_line2, "
         "new_line1, new_line2, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -349,6 +349,8 @@ def _parse_payload(payload: bytes) -> int:
     save_alignments(project_id, src_lines, tgt_lines, align_lines, score_lines, row_ids=row_ids)
     if curation and row_ids is not None:
         _save_curation(project_id, curation)
+        from phrases import apply_ignore_rules
+        apply_ignore_rules(project_id)   # confirmed pairs leave the phrase list
 
     return project_id
 

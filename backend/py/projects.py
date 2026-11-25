@@ -25,7 +25,7 @@ def delete_project(project_id):
     cursor.execute("DELETE FROM occurrences WHERE project_id=?", (project_id,))
     cursor.execute("DELETE FROM fixes WHERE project_id=?", (project_id,))
     cursor.execute("DELETE FROM ignored WHERE project_id=?", (project_id,))
-    for table in ("review_marks", "review_ok_words", "changes"):
+    for table in ("review_marks", "glossary", "changes"):
         cursor.execute(f"DELETE FROM {table} WHERE project_id=?", (project_id,))
     conn.commit()
 

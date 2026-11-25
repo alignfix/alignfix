@@ -98,7 +98,7 @@ CREATE TABLE IF NOT EXISTS ignored (
 )
 """)
 
-# Review: sentence pairs and words a person checked and accepted. A pair mark
+# Review: sentence pairs a person checked and accepted. A pair mark
 # holds a hash of the text it was given for: once the text changes, it lapses.
 c.execute("""
 CREATE TABLE IF NOT EXISTS review_marks (
@@ -110,13 +110,16 @@ CREATE TABLE IF NOT EXISTS review_marks (
     PRIMARY KEY (project_id, row_id)
 )
 """)
+# The glossary: translation pairs a person confirmed (glossary.py).
 c.execute("""
-CREATE TABLE IF NOT EXISTS review_ok_words (
+CREATE TABLE IF NOT EXISTS glossary (
+    id INTEGER PRIMARY KEY,
     project_id INTEGER,
-    side TEXT,
-    word TEXT,
+    src TEXT,
+    tgt TEXT,
+    origin TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (project_id, side, word)
+    UNIQUE (project_id, src, tgt)
 )
 """)
 # Every change to the sentences: one entry per sentence pair and action (batch),

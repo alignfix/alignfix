@@ -1846,3 +1846,20 @@ kbd {
     border: 1px solid var(--border);
     border-radius: .25rem;
 }
+
+/* ---- Phrases: confirm / hide buttons of a phrase pair */
+.phrase-actions {
+    display: flex;
+    gap: .1rem;
+}
+
+.confirm-phrase-btn:hover {
+    color: var(--ok-text);
+}
+
+.glossary-add {
+    padding: .65rem .75rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface-2);
+}

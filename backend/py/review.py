@@ -16,9 +16,12 @@ Severity of a sentence pair by its issue score (issues.issue_score):
 On a real German-Italian corpus with 2% injected errors, 30% of the high pairs
 were injected errors (most of the rest real mismatches), against 2% at random.
 
-Pairs and words a person checked can be marked OK: they stay out of the
-list (status "open") until the text of the pair changes. Words marked OK are
-not flagged at all, like hidden words, but stay in the phrase table.
+Sentence pairs a person checked can be marked OK: they stay out of the list
+(status "open") until the text of the pair changes. Words are confirmed by
+adding them with their translations to the glossary (glossary.py): they leave
+the words list, their confirmed translations count as usual translations, and
+a pair with a glossary term but none of its confirmed translations on the
+other side is flagged.
 
 Results are cached per project until the sentences or the hide list change.
 The phrase table (phrase_table) summarises the extracted phrase pairs per
@@ -30,7 +33,9 @@ from collections import Counter, defaultdict
 
 from db import get_db
 from issues import IssueModel, sentence_issues, issue_score, describe, KIND_LABELS, _NUMBER, _words
+from issues import stem
 from text import NO_BLANK_TOKEN, BLANK_TOKEN
+import glossary
 import progress
 
 HIGH_SCORE = 6.0
@@ -69,9 +74,7 @@ def text_hash(line1, line2):
     return hashlib.sha1(f"{line1 or ''}\t{line2 or ''}".encode("utf-8")).hexdigest()[:16]
 
 
-def _ok_words(cursor, project_id):
-    cursor.execute("SELECT side, word FROM review_ok_words WHERE project_id=?", (project_id,))
-    return cursor.fetchall()
+GLOSSARY_SURPRISE = 3.0   # a missing glossary translation alone makes a pair "medium"
 
 
 def _ok_rows(cursor, project_id):
@@ -81,11 +84,9 @@ def _ok_rows(cursor, project_id):
 
 
 def _hidden_words(cursor, project_id):
-    """{'src': set, 'tgt': set} of single words hidden whatever their translation, or marked OK."""
+    """{'src': set, 'tgt': set} of single words hidden whatever their translation."""
     cursor.execute("SELECT src_phrase, tgt_phrase FROM ignored WHERE project_id=?", (project_id,))
     hidden = {"src": set(), "tgt": set()}
-    for side, word in _ok_words(cursor, project_id):
-        hidden["src" if side == "src" else "tgt"].add(word)
     for src, tgt in cursor.fetchall():
         src, tgt = (src or "").strip(), (tgt or "").strip()
         if src and not tgt and " " not in src:
@@ -135,15 +136,23 @@ async def analyse(project_id):
     _, cursor = get_db()
     raw = await _check_all(project_id, cursor)
     hidden = _hidden_words(cursor, project_id)
-    key = (frozenset(hidden["src"]), frozenset(hidden["tgt"]))
+    terms = glossary.terms(project_id)
+    key = (frozenset(hidden["src"]), frozenset(hidden["tgt"]),
+           frozenset((k, frozenset(v)) for k, v in terms["src"].items()))
     view = _views.get(project_id)
     if view and view[0] is raw and view[1] == key:
         return view[2]
 
     model = raw["model"]
+    found_by_row = {row_id: (found, hashed) for row_id, found, hashed in raw["found"]}
+    confirmed = {"src": {k[0]: {stem(w) for t in v for w in t} for k, v in terms["src"].items() if len(k) == 1},
+                 "tgt": {k[0]: {stem(w) for t in v for w in t} for k, v in terms["tgt"].items() if len(k) == 1}}
+    if terms["src"]:
+        found_by_row = await _apply_glossary(project_id, cursor, terms, confirmed, found_by_row)
+
     sentences = []
     words = {}
-    for row_id, found, hashed in raw["found"]:
+    for row_id, (found, hashed) in sorted(found_by_row.items()):
         found = [f for f in found
                  if not (f["kind"] in ("missing", "unexplained") and f["word"] in hidden[f["side"]])]
         if not found:
@@ -155,6 +164,8 @@ async def analyse(project_id):
             # appear almost everywhere, are missed often but say little each time
             if f["kind"] not in ("missing", "unexplained") or f["lift"] < WORD_MIN_LIFT:
                 continue
+            if f["word"] in confirmed[f["side"]]:
+                continue   # confirmed in the glossary: reviewed
             key_w = (f["side"], f["word"])
             entry = words.get(key_w)
             if entry is None:
@@ -172,9 +183,67 @@ async def analyse(project_id):
     for entry in words.values():
         entry["examples"] = [row_id for _, row_id in sorted(entry["examples"], key=lambda x: (-x[0], x[1]))[:EXAMPLES_PER_WORD]]
         entry["severity"] = round(entry["severity"], 3)
-    analysis = {"sentences": sentences, "checked": raw["checked"], "words": words}
+    analysis = {"sentences": sentences, "checked": raw["checked"], "words": words, "glossary": terms}
     _views[project_id] = (raw, key, analysis)
     return analysis
+
+
+def _term_positions(tokens, terms):
+    """[(start, term)] of the glossary terms (token tuples) occurring in tokens."""
+    by_first = defaultdict(list)
+    for term in terms:
+        by_first[term[0]].append(term)
+    hits = []
+    for i, tok in enumerate(tokens):
+        for term in by_first.get(tok, ()):
+            if tuple(tokens[i:i + len(term)]) == term:
+                hits.append((i, term))
+    return hits
+
+
+async def _apply_glossary(project_id, cursor, terms, confirmed, found_by_row):
+    """
+    found_by_row with the glossary applied: issues of words whose confirmed
+    translation is on the other side are dropped, and glossary terms without
+    any confirmed translation on the other side are added as issues.
+    """
+    cursor.execute("SELECT row_id, line1, line2 FROM alignments WHERE project_id=? AND deleted_at IS NULL "
+                   "ORDER BY row_id", (project_id,))
+    rows = cursor.fetchall()
+    out = {}
+    n = len(rows) or 1
+    for i, (row_id, line1, line2) in enumerate(rows):
+        if i % 5000 == 0:
+            await progress.checkpoint(i / n, f"glossary: {i:,} / {len(rows):,} sentences")
+        toks = {"src": [t.casefold() for t in (line1 or "").split()],
+                "tgt": [t.casefold() for t in (line2 or "").split()]}
+        stems = {side: {stem(t) for t in toks[side]} for side in toks}
+        found, hashed = found_by_row.get(row_id, ([], None))
+        kept = []
+        for f in found:
+            other = "tgt" if f["side"] == "src" else "src"
+            ok = confirmed[f["side"]].get(f["word"])
+            if f["kind"] in ("missing", "unexplained") and ok and not ok.isdisjoint(stems[other]):
+                continue
+            kept.append(f)
+        for side, other in (("src", "tgt"), ("tgt", "src")):
+            for start, term in _term_positions(toks[side], terms[side]):
+                partners = terms[side][term]
+                # a partner counts when all of its words appear (inflections: by stem)
+                if any(all(stem(w) in stems[other] for w in partner) for partner in partners):
+                    continue
+                kept.append({
+                    "side": side, "index": start, "length": len(term), "word": " ".join(term),
+                    "kind": "glossary", "anomaly": GLOSSARY_SURPRISE, "rate": None, "lift": 0.0,
+                    "expected": sorted(" ".join(p) for p in partners), "repeat": False,
+                })
+        # a glossary issue replaces the statistical one for the same word (no double counting)
+        glossed = {(f["side"], f["word"]) for f in kept if f["kind"] == "glossary"}
+        kept = [f for f in kept if f["kind"] == "glossary"
+                or not (f["kind"] in ("missing", "unexplained") and (f["side"], f["word"]) in glossed)]
+        if kept:
+            out[row_id] = (kept, hashed or text_hash(line1, line2))
+    return out
 
 
 def _segments(line, flagged):
@@ -214,10 +283,12 @@ def _load_rows(cursor, project_id, row_ids):
 
 
 def _sentence_view(row, line1, line2):
-    src_words = {f["word"] for f in row["issues"] if f["side"] == "src" and f["word"]}
-    tgt_words = {f["word"] for f in row["issues"] if f["side"] == "tgt" and f["word"]}
-    src_pos = {f["index"] for f in row["issues"] if f["side"] == "src" and f["index"] is not None}
-    tgt_pos = {f["index"] for f in row["issues"] if f["side"] == "tgt" and f["index"] is not None}
+    src_words = {f["word"] for f in row["issues"] if f["side"] == "src" and f["word"] and f["kind"] == "number"}
+    tgt_words = {f["word"] for f in row["issues"] if f["side"] == "tgt" and f["word"] and f["kind"] == "number"}
+    def positions(side):
+        return {f["index"] + k for f in row["issues"] if f["side"] == side and f["index"] is not None
+                for k in range(f.get("length", 1))}
+    src_pos, tgt_pos = positions("src"), positions("tgt")
     src_pos |= _flagged_positions(line1, {w for w in src_words if w[:1].isdigit()})
     tgt_pos |= _flagged_positions(line2, {w for w in tgt_words if w[:1].isdigit()})
     # most words without a counterpart: the two sides probably do not belong together
@@ -241,7 +312,7 @@ def _sentence_view(row, line1, line2):
     }
 
 
-def _summary(analysis, sentences, ok_count=0, ok_words=0):
+def _summary(analysis, sentences, ok_count=0, glossary_terms=0):
     by_level = Counter(r["level"] for r in sentences)
     kinds = defaultdict(Counter)       # kind -> level -> sentences
     for r in sentences:
@@ -257,7 +328,7 @@ def _summary(analysis, sentences, ok_count=0, ok_words=0):
         "top_words": [[w["side"], w["word"], w["flagged"]] for w in top_words],
         "thresholds": {"high": HIGH_SCORE, "medium": MEDIUM_SCORE},
         "ok": ok_count,
-        "ok_words": ok_words,
+        "glossary_terms": glossary_terms,
     }
 
 
@@ -276,19 +347,21 @@ async def _filtered(project_id, view, search, min_level, kind, side, status):
     for r in analysis["sentences"]:
         r["ok"] = marks.get(r["row_id"]) == r["hash"]
     open_rows = [r for r in analysis["sentences"] if not r["ok"]]
-    ok_words = _ok_words(cursor, project_id)
-    summary = _summary(analysis, open_rows, len(analysis["sentences"]) - len(open_rows), len(ok_words))
+    terms = analysis["glossary"]
+    confirmed = [{"side": side, "word": " ".join(term), "ok": True, "flagged": 0, "sentences": 0, "rate": None,
+                  "expected": sorted(" ".join(p) for p in partners), "severity": 0.0}
+                 for side in ("src", "tgt") for term, partners in terms[side].items()]
+    confirmed.sort(key=lambda w: (w["word"], w["side"]))
+    summary = _summary(analysis, open_rows, len(analysis["sentences"]) - len(open_rows), len(terms["src"]))
 
     if view == "words":
         if status == "ok":
-            rows = [{"side": s_, "word": w, "ok": True, "flagged": 0, "sentences": 0, "rate": None,
-                     "expected": [], "severity": 0.0} for s_, w in sorted(ok_words, key=lambda x: (x[1], x[0]))]
+            rows = confirmed
         else:
             rows = [dict(w, ok=False) for w in analysis["words"].values()]
             rows.sort(key=lambda w: (-w["severity"], -w["flagged"], w["word"]))
             if status == "all":
-                rows += [{"side": s_, "word": w, "ok": True, "flagged": 0, "sentences": 0, "rate": None,
-                          "expected": [], "severity": 0.0} for s_, w in sorted(ok_words, key=lambda x: (x[1], x[0]))]
+                rows += confirmed
         if side:
             rows = [w for w in rows if w["side"] == side]
         if needle:
@@ -384,19 +457,6 @@ async def mark_all(project_id, search="", min_level="medium", kind="", side="", 
     """Mark every open pair matching the filters OK (or every OK pair open again)."""
     _, rows, _ = await _filtered(project_id, "sentences", search, min_level, kind, side, "open" if ok else "ok")
     return mark_pairs(project_id, [r["row_id"] for r in rows], ok)
-
-
-def mark_word(project_id, side, word, ok=True):
-    conn, cursor = get_db()
-    side = "tgt" if side == "tgt" else "src"
-    if ok:
-        cursor.execute("INSERT OR IGNORE INTO review_ok_words (project_id, side, word) VALUES (?, ?, ?)",
-                       (project_id, side, word))
-    else:
-        cursor.execute("DELETE FROM review_ok_words WHERE project_id=? AND side=? AND word=?",
-                       (project_id, side, word))
-    conn.commit()
-    return True
 
 
 async def word_examples(project_id, side, word):

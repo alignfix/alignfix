@@ -121,7 +121,8 @@ function reportText(s, options) {
     `Added (augmentation):     ${s.added_pairs}`,
     `Exported sentence pairs:  ${s.exported_pairs}`,
     "",
-    `Review: ${plural(s.review_marked_ok_pairs, "sentence pair")} and ${plural(s.review_marked_ok_words, "word")} checked and marked OK.`,
+    `Review: ${plural(s.review_marked_ok_pairs, "sentence pair")} checked and marked OK.`,
+    `Glossary: ${plural(s.glossary_entries, "confirmed translation pair")}.`,
   ];
   const names = { delete: "Deleted", edit: "Edited", add: "Added" };
   for (const action of ["delete", "edit", "add"]) {
@@ -140,7 +141,8 @@ function reportText(s, options) {
     "  line_origins.tsv         for every exported line: its line in the uploaded files and whether it was",
     "                           edited or added (an added pair points to the line it was copied from)",
     "  changes.tsv              every change: step, date, action, reason, line, text before and after",
-    "  fixes.json               the find & fix and augmentation rules (History page)");
+    "  fixes.json               the find & fix and augmentation rules (History page)",
+    "  glossary.tsv             the confirmed translation pairs (source<TAB>target)");
   if (s.split) lines.push("  split/*.src, *.tgt       the parts; split/*.lines: original line of each pair");
   return lines.join("\n") + "\n";
 }
@@ -178,6 +180,7 @@ json.dumps({"export": corpus_export(*dl_args), "project": get_project(dl_args[0]
   zip.file("changes.tsv", tsv(["step", "date", "action", "reason", "original_line", "copied_from",
     "old_source", "old_target", "new_source", "new_target"], data.changes));
   zip.file("report.txt", reportText(data.summary, options));
+  zip.file("glossary.tsv", tsv(["src", "tgt"], data.glossary));
   if (data.split) {
     for (const part of ["train", "dev", "test"]) {
       const idx = data.split.flatMap((p, i) => (p === part ? [i] : []));

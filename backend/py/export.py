@@ -7,6 +7,7 @@ The curated corpus for download, with what is needed to reproduce it:
   edited;
 - the change log as a table, and a short report: how many pairs were deleted,
   edited and added, and why;
+- the glossary of confirmed translation pairs;
 - optionally a train / dev / test split in which no source or target sentence
   occurs in two parts (pairs sharing a sentence always go to the same part).
 """
@@ -136,8 +137,8 @@ def corpus_export(project_id, dev_size=0, test_size=0, seed=1):
         by_reason[c["action"]][c["reason"]] += 1
     cursor.execute("SELECT COUNT(*) FROM review_marks WHERE project_id=? AND status='ok'", (project_id,))
     marked_ok = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*) FROM review_ok_words WHERE project_id=?", (project_id,))
-    ok_words = cursor.fetchone()[0]
+    import glossary
+    glossary_entries = glossary.export_entries(project_id)
 
     deleted_rows = {c["row_id"] for c in changes if c["action"] == "delete"}
     summary = {
@@ -149,7 +150,7 @@ def corpus_export(project_id, dev_size=0, test_size=0, seed=1):
         "added_pairs": len(added),
         "exported_pairs": len(rows),
         "review_marked_ok_pairs": marked_ok,
-        "review_marked_ok_words": ok_words,
+        "glossary_entries": len(glossary_entries),
         "reasons": {action: dict(counter.most_common()) for action, counter in by_reason.items()},
     }
 
@@ -160,6 +161,7 @@ def corpus_export(project_id, dev_size=0, test_size=0, seed=1):
         "alignments": [r[3] or "" for r in rows],
         "provenance": provenance,
         "changes": change_rows,
+        "glossary": glossary_entries,
         "split": None,
     }
     if dev_size or test_size:

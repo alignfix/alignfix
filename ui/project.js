@@ -19,6 +19,8 @@ import { fetchTranslations, storeTranslation, deleteTranslation, deleteTranslati
 import { applyFixes } from "../backend/js/fixes.js";
 import { getProject, saveProject, downloadProject, mergeProjectStats } from "../backend/js/projects.js";
 import { recomputeAlignments } from "../backend/js/aligner.js";
+import { fetchGlossary, addPhraseToGlossary, addGlossaryPairs, removeGlossaryEntry, clearGlossary,
+  importGlossaryFile, downloadGlossary } from "../backend/js/glossary.js";
 import { bindAsyncButton, escapeHtml, reportError, formatCount } from "./utils.js";
 import { profiler } from "./profiler.js";
 import { runActivity, stage } from "./activity.js";
@@ -229,6 +231,44 @@ export async function renderProject(id, params = new URLSearchParams()) {
           <div class="p-2" id="fixes-container" style="max-height: 200px; overflow-y: auto;">
             <div class="text-center text-muted py-3">
               <i class="fas fa-info-circle me-2"></i>No changes pending
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="glossary-panel" class="accordion mt-4">
+        <div class="accordion-item">
+          <h2 class="accordion-header" id="headingGlossary">
+            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseGlossary"
+              aria-expanded="false" aria-controls="collapseGlossary">
+              <i class="fas fa-book me-2 text-muted"></i>Glossary
+              <span class="badge rounded-pill text-bg-secondary ms-2" id="glossary-count">0</span>
+            </button>
+          </h2>
+          <div id="collapseGlossary" class="accordion-collapse collapse" aria-labelledby="headingGlossary"
+            data-bs-parent="#glossary-panel">
+            <div class="accordion-body">
+              <p class="small text-muted">Translation pairs you confirmed: with <i class="fas fa-check"></i> in the phrase list,
+                in Review &gt; Words, or here. They leave the phrase list, and Review flags pairs that have a glossary
+                term but none of its confirmed translations.</p>
+              <form id="glossary-form" class="input-group input-group-sm mb-2">
+                <input type="text" class="form-control" id="glossary-src" placeholder="Source" aria-label="Glossary source" required>
+                <input type="text" class="form-control" id="glossary-tgt" placeholder="Target" aria-label="Glossary target" required>
+                <button class="btn btn-outline-primary" type="submit" title="Add the pair to the glossary"><i class="fas fa-plus"></i></button>
+              </form>
+              <table id="glossary-table" class="table table-sm">
+                <thead><tr><th>pair</th><th></th></tr></thead>
+                <tbody></tbody>
+              </table>
+              <div class="mb-3">
+                <label for="glossary-file-input" class="form-label">Import a glossary</label>
+                <input class="form-control form-control-sm" type="file" id="glossary-file-input" accept=".tsv,.txt,.json,text/plain,application/json">
+                <div class="form-text"><code>source&lt;TAB&gt;target</code> per line, or JSON exported here.</div>
+              </div>
+              <div class="d-flex flex-wrap gap-2">
+                <button id="download-glossary-tsv" class="btn btn-sm btn-secondary"><i class="fas fa-download"></i> TSV</button>
+                <button id="download-glossary-json" class="btn btn-sm btn-secondary"><i class="fas fa-download"></i> JSON</button>
+                <button id="clear-glossary-btn" class="btn btn-sm btn-outline-danger ms-auto"><i class="fas fa-trash-can"></i> Remove all</button>
+              </div>
             </div>
           </div>
         </div>
@@ -742,7 +782,10 @@ export async function renderProject(id, params = new URLSearchParams()) {
     columns: [
         { data: null, render: (data, type, row) => `<button class="btn btn-sm btn-outline show-phrases-btn" data-src="${escapeForHtmlAttr(row.src_phrase)}" data-tgt="${escapeForHtmlAttr(row.tgt_phrase)}" data-direction="${row.direction}"><i class="fas fa-search"></i> ${row.num_occurrences}</button>
         <button class="btn btn-sm btn-clear show-src-phrase-btn" data-text="${escapeForHtmlAttr(row.src_phrase)}">${escapeHtml(row.src_phrase)}</button>${getDirectionSymbol(row.direction)}<button class="btn btn-sm btn-clear search-tgt-phrase-btn" data-text="${escapeForHtmlAttr(row.tgt_phrase)}">${escapeHtml(row.tgt_phrase)}</button>` },
-        { data: null, render: (data, type, row) => `<button class="btn btn-sm btn-outline ignore-phrase-btn" data-id="${row.id}" data-src="${escapeHtml(row.src_phrase)}" data-tgt="${escapeHtml(row.tgt_phrase)}"><i class="fas fa-eye-slash"></i></button>` }
+        { data: null, render: (data, type, row) => `<div class="phrase-actions">
+            <button class="btn btn-sm btn-outline confirm-phrase-btn" data-id="${row.id}" title="Correct: add to the glossary" aria-label="Add to the glossary"><i class="fas fa-check"></i></button>
+            <button class="btn btn-sm btn-outline ignore-phrase-btn" data-id="${row.id}" data-src="${escapeHtml(row.src_phrase)}" data-tgt="${escapeHtml(row.tgt_phrase)}" title="Hide this pair" aria-label="Hide this pair"><i class="fas fa-eye-slash"></i></button>
+          </div>` }
     ]
   });
   // Text size of the phrase and sentence lists (saved in the browser)
@@ -762,6 +805,20 @@ export async function renderProject(id, params = new URLSearchParams()) {
 
   // Attach handlers every time the table draws
   phrasesTable.on('draw', () => {
+    document.querySelectorAll('.confirm-phrase-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        try {
+          await addPhraseToGlossary(id, btn.dataset.id);
+          toast("Added to the glossary.", "success");
+          glossaryTable.ajax.reload(null, false);
+          phrasesTable.ajax.reload(null, false);
+        } catch (err) {
+          reportError(err);
+          btn.disabled = false;
+        }
+      });
+    });
     document.querySelectorAll('.ignore-phrase-btn').forEach(btn => {
       const phrase_id =  btn.dataset.id;
       btn.addEventListener('click', async () => {
@@ -799,6 +856,86 @@ export async function renderProject(id, params = new URLSearchParams()) {
       const direction = btn.dataset.direction;
       btn.addEventListener('click', () => showTranslations(src, tgt, direction));
     });
+  });
+
+  // The glossary
+  const glossaryTable = $("#glossary-table").DataTable({
+    processing: true,
+    serverSide: true,
+    autoWidth: false,
+    pageLength: 6,
+    lengthChange: false,
+    searching: false,
+    ajax: function (d, callback) {
+      fetchGlossary({ ...d, project_id: id }).then(result => {
+        document.getElementById("glossary-count").textContent = result.recordsTotal.toLocaleString();
+        callback(result);
+      }).catch(reportError);
+    },
+    language: { emptyTable: "No confirmed pairs yet." },
+    columns: [
+      { data: null, render: (data, type, row) => `${escapeHtml(row.src)} ↔ ${escapeHtml(row.tgt)}` },
+      { data: null, render: (data, type, row) => `<button class="btn btn-sm btn-outline remove-glossary-btn" data-id="${row.id}" title="Remove from the glossary" aria-label="Remove from the glossary"><i class="fas fa-undo"></i></button>` },
+    ],
+  });
+  glossaryTable.on('draw', () => {
+    document.querySelectorAll('.remove-glossary-btn').forEach(btn => btn.addEventListener('click', async () => {
+      try {
+        await removeGlossaryEntry(id, btn.dataset.id);
+        glossaryTable.ajax.reload(null, false);
+        phrasesTable.ajax.reload(null, false);
+      } catch (err) {
+        reportError(err);
+      }
+    }));
+  });
+  document.getElementById("glossary-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const src = document.getElementById("glossary-src").value.trim();
+    const tgt = document.getElementById("glossary-tgt").value.trim();
+    if (!src || !tgt) { toast("Type a source and a target.", "warning"); return; }
+    try {
+      const added = await addGlossaryPairs(id, [[src, tgt]]);
+      toast(added ? `“${src}” ↔ “${tgt}” added to the glossary.` : "That pair is already in the glossary.", added ? "success" : "info");
+      e.target.reset();
+      glossaryTable.ajax.reload();
+      phrasesTable.ajax.reload(null, false);
+    } catch (err) {
+      reportError(err);
+    }
+  });
+  document.getElementById("glossary-file-input").addEventListener("change", (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+    file.text()
+      .then(content => importGlossaryFile(id, content))
+      .then(({ read, added }) => {
+        const dup = read - added;
+        toast(`${file.name}: ${added.toLocaleString()} pairs added to the glossary` +
+          (dup ? ` (${dup.toLocaleString()} already there).` : "."), "success");
+        glossaryTable.ajax.reload();
+        phrasesTable.ajax.reload(null, false);
+      })
+      .catch(reportError)
+      .finally(() => { event.target.value = ""; });
+  });
+  for (const format of ["tsv", "json"]) {
+    document.getElementById(`download-glossary-${format}`).addEventListener("click", async () => {
+      try {
+        const n = await downloadGlossary(id, format, project.name);
+        if (!n) toast("The glossary is empty.", "info");
+      } catch (err) {
+        reportError(err);
+      }
+    });
+  }
+  bindAsyncButton(document.getElementById("clear-glossary-btn"), async () => {
+    const ok = await showDeleteConfirm("Remove all pairs from the glossary?\n\nTheir phrase pairs are listed again.",
+      "Empty the glossary", "Remove all");
+    if (!ok) return;
+    await clearGlossary(id);
+    glossaryTable.ajax.reload();
+    phrasesTable.ajax.reload(null, false);
   });
 
   // Initialize DataTable with POST-based server-side processing

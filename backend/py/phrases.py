@@ -382,8 +382,10 @@ def save_phrases(project_id, phrases,
 # single-word wildcard on that side ("der die" if "der" and "die" are hidden).
 # ignore=2 is recomputed by apply_ignore_rules() whenever the list or the
 # phrases change, so removing an entry shows its phrases again.
+# 3 = confirmed: the pair is in the glossary (glossary.py), recomputed the same way.
 
 HIDDEN_BY_USER = 1
+IN_GLOSSARY = 3
 HIDDEN_BY_LIST = 2
 
 
@@ -439,6 +441,8 @@ def apply_ignore_rules(project_id):
             any_src.add(s)
         elif t:
             any_tgt.add(t)
+    from glossary import folded_pairs
+    confirmed = folded_pairs(project_id)
     words_src = {w for w in any_src if " " not in w}
     words_tgt = {w for w in any_tgt if " " not in w}
 
@@ -450,16 +454,20 @@ def apply_ignore_rules(project_id):
                (len(wt) > 1 and all(w in words_tgt for w in wt))
 
     cursor.execute('SELECT id, src_phrase, tgt_phrase, ignore FROM phrases '
-                   'WHERE project_id=? AND ignore IN (0, 2)', (project_id,))
-    show, hide = [], []
+                   f'WHERE project_id=? AND ignore IN (0, {HIDDEN_BY_LIST}, {IN_GLOSSARY})', (project_id,))
+    updates = defaultdict(list)
     for pid, src, tgt, flag in cursor.fetchall():
-        h = bool(pairs or any_src or any_tgt) and hidden(_fold(src), _fold(tgt))
-        if h and flag != HIDDEN_BY_LIST:
-            hide.append((pid,))
-        elif not h and flag == HIDDEN_BY_LIST:
-            show.append((pid,))
-    cursor.executemany(f'UPDATE phrases SET ignore={HIDDEN_BY_LIST} WHERE id=?', hide)
-    cursor.executemany('UPDATE phrases SET ignore=0 WHERE id=?', show)
+        s, t = _fold(src), _fold(tgt)
+        if (s, t) in confirmed:
+            want = IN_GLOSSARY
+        elif (pairs or any_src or any_tgt) and hidden(s, t):
+            want = HIDDEN_BY_LIST
+        else:
+            want = 0
+        if want != flag:
+            updates[want].append((pid,))
+    for want, ids in updates.items():
+        cursor.executemany(f'UPDATE phrases SET ignore={want} WHERE id=?', ids)
     conn.commit()
     cursor.execute('SELECT COUNT(*) FROM phrases WHERE project_id=? AND ignore=?',
                    (project_id, HIDDEN_BY_LIST))
