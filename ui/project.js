@@ -52,6 +52,14 @@ function escapeForHtmlAttr(str) {
     .replace(/\r?\n/g, '\\n');
 }
 
+const TEXT_SIZE_KEY = 'alignfix-text-size';
+
+function getTextSize() {
+  let pct = 100;
+  try { pct = Number(localStorage.getItem(TEXT_SIZE_KEY)) || 100; } catch (e) { /* private mode */ }
+  return Math.min(180, Math.max(80, pct));
+}
+
 export async function renderProject(id, params = new URLSearchParams()) {
   const app = document.getElementById("app");
 
@@ -73,7 +81,14 @@ export async function renderProject(id, params = new URLSearchParams()) {
         <i class="fas fa-save"></i> Save
       </button>
     </div>
-    <div class="d-flex flex-wrap gap-2">
+    <div class="d-flex flex-wrap align-items-center gap-2">
+      <label class="text-size-control" title="Text size of phrases and sentences">
+        <i class="fas fa-font text-size-small" aria-hidden="true"></i>
+        <input type="range" class="form-range" id="text-size-range" min="80" max="180" step="10"
+               aria-label="Text size of phrases and sentences">
+        <i class="fas fa-font text-size-large" aria-hidden="true"></i>
+        <span id="text-size-value" class="text-size-value tabular"></span>
+      </label>
       <button id="apply-fixes-btn" class="btn btn-success" type="button" title="Apply the pending edits to the corpus">
         <i class="fas fa-check-double"></i> Apply edits
       </button>
@@ -649,6 +664,21 @@ export async function renderProject(id, params = new URLSearchParams()) {
         { data: null, render: (data, type, row) => `<button class="btn btn-sm btn-outline ignore-phrase-btn" data-id="${row.id}" data-src="${escapeHtml(row.src_phrase)}" data-tgt="${escapeHtml(row.tgt_phrase)}"><i class="fas fa-eye-slash"></i></button>` }
     ]
   });
+  // Text size of the phrase and sentence lists (saved in the browser)
+  const sizeRange = document.getElementById('text-size-range');
+  const sizeValue = document.getElementById('text-size-value');
+  const showSize = pct => {
+    document.documentElement.style.setProperty('--text-scale', pct / 100);
+    sizeValue.textContent = `${pct}%`;
+  };
+  sizeRange.value = getTextSize();
+  showSize(Number(sizeRange.value));
+  sizeRange.addEventListener('input', () => showSize(Number(sizeRange.value)));
+  sizeRange.addEventListener('change', () => {
+    try { localStorage.setItem(TEXT_SIZE_KEY, sizeRange.value); } catch (e) { /* private mode */ }
+    phrasesTable.scroller.measure(); // rows are taller or shorter now
+  });
+
   // Attach handlers every time the table draws
   phrasesTable.on('draw', () => {
     document.querySelectorAll('.ignore-phrase-btn').forEach(btn => {

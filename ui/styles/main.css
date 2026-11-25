@@ -1686,3 +1686,47 @@ div.dt-scroll-body {
     --bs-btn-active-bg: var(--chip-bg);
     --bs-btn-active-color: var(--text);
 }
+
+/* ---- text size of the phrase and sentence lists (slider on the Phrases page) */
+.text-size-control {
+    display: inline-flex;
+    align-items: center;
+    gap: .45rem;
+    margin: 0 .5rem 0 0;
+    color: var(--text-muted);
+    cursor: default;
+}
+
+.text-size-control .form-range {
+    width: 7rem;
+}
+
+.text-size-small { font-size: .7rem; }
+.text-size-large { font-size: 1.05rem; }
+
+.text-size-value {
+    font-size: .78rem;
+    min-width: 2.6rem;
+}
+
+#translations-table tbody {
+    font-size: calc(.875rem * var(--text-scale, 1));
+}
+
+#phrases-table tbody td {
+    font-size: calc(.875rem * var(--text-scale, 1));
+    white-space: normal;        /* Scroller sets nowrap: long pairs would be cut off */
+}
+
+#phrases-table tbody td .btn {
+    text-align: left;
+}
+
+#phrases-table tbody td:last-child {
+    width: 1%;
+    vertical-align: top;
+}
+
+#phrases-table tbody .btn {
+    --bs-btn-font-size: calc(.8125rem * var(--text-scale, 1));
+}
