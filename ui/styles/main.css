@@ -1746,3 +1746,69 @@ div.dt-scroll-body {
 #phrases-table tbody .btn {
     --bs-btn-font-size: calc(.8125rem * var(--text-scale, 1));
 }
+
+/* ---- Stats page */
+.corpus-table th,
+.perf-table th {
+    white-space: nowrap;
+}
+
+.settings-list > div {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: .45rem 0;
+    border-bottom: 1px solid var(--divider);
+    font-size: .875rem;
+}
+
+.settings-list > div:last-child {
+    border-bottom: 0;
+}
+
+.settings-list dt {
+    font-weight: 400;
+    color: var(--text-muted);
+}
+
+.settings-list dd {
+    margin: 0;
+    font-weight: 600;
+}
+
+.perf-bar-col {
+    width: 35%;
+    min-width: 8rem;
+}
+
+.perf-bar {
+    height: 8px;
+    border-radius: 4px;
+    background: var(--chip-bg);
+    overflow: hidden;
+}
+
+.perf-bar > span {
+    display: block;
+    height: 100%;
+    min-width: 2px;
+    border-radius: 4px;
+    background: var(--accent);
+}
+
+.perf-table tfoot td {
+    font-weight: 600;
+    border-top: 1px solid var(--border-strong);
+    border-bottom: 0;
+}
+
+.perf-table td.tabular,
+.corpus-table td.tabular {
+    white-space: nowrap;
+}
+
+@media (max-width: 575.98px) {
+    .perf-bar-col {
+        display: none;
+    }
+}
