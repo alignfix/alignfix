@@ -72,8 +72,73 @@ def _create_payload(data: Dict[str, Any]) -> bytes:
 
     # 4. Phrases
     payload += _pack_phrases(data["phrases"])
+
+    # 5. Curation: row ids, review marks and the change log (JSON). Older
+    #    versions stop after the phrases and ignore it.
+    payload += _pack_curation(data.get("project", {}).get("id"), data.get("row_ids"))
     
     return payload
+
+CURATION_TAG = b"CURA"
+
+
+def _pack_curation(project_id, row_ids) -> bytes:
+    from db import get_db
+    from text import tokenise, detokenise
+    from review import text_hash
+    _, cursor = get_db()
+    cursor.execute("SELECT row_id, line1, line2 FROM alignments WHERE project_id=? AND deleted_at IS NULL "
+                   "ORDER BY row_id", (project_id,))
+    # The alignment section holds detokenised text, which import tokenises again.
+    # The few lines where that does not give back the stored text are kept as they are.
+    raw, current = {}, {}
+    for i, (row_id, line1, line2) in enumerate(cursor.fetchall()):
+        current[row_id] = text_hash(line1, line2)
+        pair = [line1 if tokenise(detokenise(line1 or ""), as_string=True) != line1 else None,
+                line2 if tokenise(detokenise(line2 or ""), as_string=True) != line2 else None]
+        if pair != [None, None]:
+            raw[str(i)] = pair
+    # marks travel only while they are valid; import gives them the hash of the imported text
+    cursor.execute("SELECT row_id, status, text_hash, created_at FROM review_marks WHERE project_id=?", (project_id,))
+    marks = [[r[0], r[1], r[3]] for r in cursor.fetchall() if current.get(r[0]) == r[2]]
+    cursor.execute("SELECT side, word, created_at FROM review_ok_words WHERE project_id=?", (project_id,))
+    ok_words = [list(r) for r in cursor.fetchall()]
+    cursor.execute("SELECT batch, row_id, action, reason, origin_row, old_line1, old_line2, new_line1, new_line2, "
+                   "created_at FROM changes WHERE project_id=? ORDER BY id", (project_id,))
+    changes = [list(r) for r in cursor.fetchall()]
+    body = json.dumps({"row_ids": row_ids or [], "raw_lines": raw, "marks": marks, "ok_words": ok_words,
+                       "changes": changes},
+                      ensure_ascii=False).encode("utf-8")
+    return CURATION_TAG + struct.pack('>I', len(body)) + body
+
+
+def _parse_curation(payload: bytes, offset: int):
+    """(curation dict or None, new offset)."""
+    if payload[offset:offset + 4] != CURATION_TAG:
+        return None, offset
+    offset += 4
+    size = struct.unpack('>I', payload[offset:offset + 4])[0]
+    offset += 4
+    return json.loads(payload[offset:offset + size].decode("utf-8")), offset + size
+
+
+def _save_curation(project_id, curation):
+    from db import get_db
+    from review import text_hash
+    conn, cursor = get_db()
+    cursor.execute("SELECT row_id, line1, line2 FROM alignments WHERE project_id=?", (project_id,))
+    hashes = {r[0]: text_hash(r[1], r[2]) for r in cursor.fetchall()}
+    cursor.executemany("INSERT OR REPLACE INTO review_marks (project_id, row_id, status, text_hash, created_at) "
+                       "VALUES (?, ?, ?, ?, ?)",
+                       [(project_id, m[0], m[1], hashes[m[0]], m[2]) for m in curation.get("marks", []) if m[0] in hashes])
+    cursor.executemany("INSERT OR IGNORE INTO review_ok_words (project_id, side, word, created_at) VALUES (?, ?, ?, ?)",
+                       [(project_id, *w) for w in curation.get("ok_words", [])])
+    cursor.executemany(
+        "INSERT OR IGNORE INTO changes (project_id, batch, row_id, action, reason, origin_row, old_line1, old_line2, "
+        "new_line1, new_line2, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [(project_id, *c) for c in curation.get("changes", [])])
+    conn.commit()
+
 
 def _pack_alignments(lines1: List[str], lines2: List[str], 
                     alignments: List[str], scores: List[float]) -> bytes:
@@ -252,8 +317,9 @@ def _parse_payload(payload: bytes) -> int:
         project_id, stats=project_meta.get("stats", {})
     )
     
-    # 2. Parse alignments
-    offset = _parse_alignments(payload, offset, project_id)
+    # 2. Parse alignments (saved at the end, once the row ids are known)
+    alignments = []
+    offset = _parse_alignments(payload, offset, project_id, alignments)
     print(f"Parsed alignments, offset now: {offset}")
     
     # 3. Parse fixes
@@ -265,10 +331,28 @@ def _parse_payload(payload: bytes) -> int:
     if offset < len(payload):
         offset = _parse_phrases(payload, offset, project_id)
         print(f"Parsed phrases, offset now: {offset}")
-    
+
+    # 5. Curation (files of older versions have none: rows are numbered from 0)
+    curation, offset = _parse_curation(payload, offset)
+    src_lines, tgt_lines, align_lines, score_lines = alignments
+    # the text is stored detokenised: tokenise it again, as when a project is created
+    from text import tokenise
+    raw = (curation or {}).get("raw_lines") or {}
+    for i in range(len(src_lines)):
+        exact = raw.get(str(i))
+        src_lines[i] = exact[0] if exact and exact[0] is not None else tokenise(src_lines[i], as_string=True)
+        tgt_lines[i] = exact[1] if exact and exact[1] is not None else tokenise(tgt_lines[i], as_string=True)
+    row_ids = (curation or {}).get("row_ids") or None
+    if row_ids is not None and len(row_ids) != len(src_lines):
+        row_ids = None
+    print("Importing alignments:", len(src_lines))
+    save_alignments(project_id, src_lines, tgt_lines, align_lines, score_lines, row_ids=row_ids)
+    if curation and row_ids is not None:
+        _save_curation(project_id, curation)
+
     return project_id
 
-def _parse_alignments(payload: bytes, offset: int, project_id: int) -> int:
+def _parse_alignments(payload: bytes, offset: int, project_id: int, out: list) -> int:
     """Parse alignments data from payload."""
     # Read number of alignments
     num_alignments = struct.unpack('>I', payload[offset:offset+4])[0]
@@ -304,8 +388,7 @@ def _parse_alignments(payload: bytes, offset: int, project_id: int) -> int:
         align_lines.append(alignment)
         score_lines.append(score)
     
-    print("Importing alignments:", len(src_lines))
-    save_alignments(project_id, src_lines, tgt_lines, align_lines, score_lines)
+    out.extend([src_lines, tgt_lines, align_lines, score_lines])
     return offset
 
 def _parse_fixes(payload: bytes, offset: int, project_id: int) -> int:

@@ -56,7 +56,7 @@ export function initPyodide() {
 }
 
 const PYTHON_MODULES = [
-    'db', 'progress', 'projects', 'alignment', 'phrases', 'scores', 'lexicon',
+    'db', 'progress', 'changelog', 'projects', 'export', 'alignment', 'phrases', 'scores', 'lexicon',
     'text', 'fixes', 'utils', 'binary', 'issues', 'review',
 ];
 

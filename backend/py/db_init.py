@@ -119,6 +119,30 @@ CREATE TABLE IF NOT EXISTS review_ok_words (
     PRIMARY KEY (project_id, side, word)
 )
 """)
+# Every change to the sentences: one entry per sentence pair and action (batch),
+# with the text before and after, for the change report of the download.
+c.execute("""
+CREATE TABLE IF NOT EXISTS changes (
+    id INTEGER PRIMARY KEY,
+    project_id INTEGER,
+    batch INTEGER,
+    row_id INTEGER,
+    action TEXT,
+    reason TEXT,
+    origin_row INTEGER,
+    old_line1 TEXT,
+    old_line2 TEXT,
+    new_line1 TEXT,
+    new_line2 TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (project_id, batch, row_id)
+)
+""")
+c.execute("""
+CREATE INDEX IF NOT EXISTS idx_changes_row
+ON changes (project_id, row_id)
+""")
+
 c.execute("""
 CREATE INDEX IF NOT EXISTS idx_phrases_lookup
 ON phrases (src_phrase, tgt_phrase, direction, project_id)

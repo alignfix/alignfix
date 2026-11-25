@@ -8,6 +8,7 @@ from text import tokenise, detokenise, highlight_tokens
 from alignment import parse_alignment
 from phrases import get_directed_phrases_from_texts_and_alignment, get_phrase_occurrences
 from db import get_db
+import changelog
 
 def create_project(name="Project"):
     conn, cursor = get_db()
@@ -24,6 +25,8 @@ def delete_project(project_id):
     cursor.execute("DELETE FROM occurrences WHERE project_id=?", (project_id,))
     cursor.execute("DELETE FROM fixes WHERE project_id=?", (project_id,))
     cursor.execute("DELETE FROM ignored WHERE project_id=?", (project_id,))
+    for table in ("review_marks", "review_ok_words", "changes"):
+        cursor.execute(f"DELETE FROM {table} WHERE project_id=?", (project_id,))
     conn.commit()
 
 def get_projects():
@@ -116,14 +119,16 @@ def get_alignment_row_ids(project_id):
     cursor.execute("SELECT row_id FROM alignments WHERE project_id=? AND deleted_at IS NULL ORDER BY row_id", (project_id,))
     return [row[0] for row in cursor.fetchall()]
 
-def save_alignments(project_id, src_lines, tgt_lines, align_lines, score_lines, first_row_id=0):
-    """Insert sentence pairs as rows first_row_id, first_row_id + 1, ... (callable in chunks)."""
+def save_alignments(project_id, src_lines, tgt_lines, align_lines, score_lines, first_row_id=0, row_ids=None):
+    """Insert sentence pairs as rows first_row_id, first_row_id + 1, ... (callable in chunks),
+    or with the given row_ids."""
     conn, cursor = get_db()
+    ids = row_ids if row_ids is not None else range(first_row_id, first_row_id + len(src_lines))
     cursor.executemany(
         'INSERT INTO alignments (row_id, line1, line2, alignment, score, synced_at, project_id) '
         'VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)',
-        ((first_row_id + i, src, tgt, align, score, project_id)
-         for i, (src, tgt, align, score) in enumerate(zip(src_lines, tgt_lines, align_lines, score_lines))))
+        ((row_id, src, tgt, align, score, project_id)
+         for row_id, src, tgt, align, score in zip(ids, src_lines, tgt_lines, align_lines, score_lines)))
     conn.commit()
 
 def update_alignments(project_id, align_lines, row_ids=None):
@@ -169,7 +174,7 @@ def get_project_data_for_download(project_id, export_phrases=False):
     cursor.execute("SELECT id, name, min_phrase_len, max_phrase_len, file_offset, min_count, max_count, threshold, max_phrases, stats, created_at FROM projects WHERE id=?", (project_id,))
     project = cursor.fetchone()
 
-    cursor.execute("SELECT row_id, line1, line2, alignment, score FROM alignments WHERE project_id=? AND deleted_at IS NULL", (project_id,))
+    cursor.execute("SELECT row_id, line1, line2, alignment, score FROM alignments WHERE project_id=? AND deleted_at IS NULL ORDER BY row_id", (project_id,))
     alignments = cursor.fetchall()
 
     cursor.execute("SELECT id, src_phrase, src_fix, tgt_phrase, tgt_fix, direction, num_occurrences, percentage, type, created_at FROM fixes WHERE project_id=?", (project_id,))
@@ -207,6 +212,7 @@ def get_project_data_for_download(project_id, export_phrases=False):
             "stats": json.loads(project[9]) if project[9] else {},
             "created_at": project[10],
         },
+        "row_ids": [row[0] for row in alignments],
         "lines1": [detokenise(row[1]) for row in alignments],
         "lines2": [detokenise(row[2]) for row in alignments],
         "alignments": [row[3] for row in alignments],
@@ -277,19 +283,23 @@ def update_translation(project_id, row_id, line1, line2):
     line2 = tokenise(line2, as_string=True)
 
     conn, cursor = get_db()
-    cursor.execute("UPDATE alignments SET line1=?, line2=? WHERE project_id=? AND row_id=?",
-                   (line1, line2, project_id, row_id))
+    with changelog.batch(project_id, "edit", "Edited by hand"):
+        changelog.record(row_id)
+        cursor.execute("UPDATE alignments SET line1=?, line2=? WHERE project_id=? AND row_id=?",
+                       (line1, line2, project_id, row_id))
     affected = _phrases_of_row(cursor, project_id, row_id)
     cursor.execute("DELETE FROM occurrences WHERE project_id=? AND row_id=?", (project_id, row_id))
     _recount_phrases(cursor, project_id, affected)
     conn.commit()
 
 
-def delete_translation(project_id, row_id):
+def delete_translation(project_id, row_id, reason="Deleted by hand"):
     """Mark one sentence pair as deleted and update the counts of its phrases."""
     conn, cursor = get_db()
-    cursor.execute("UPDATE alignments SET deleted_at=CURRENT_TIMESTAMP WHERE project_id=? AND row_id=?",
-                   (project_id, row_id))
+    with changelog.batch(project_id, "delete", reason):
+        changelog.record(row_id)
+        cursor.execute("UPDATE alignments SET deleted_at=CURRENT_TIMESTAMP WHERE project_id=? AND row_id=?",
+                       (project_id, row_id))
     _recount_phrases(cursor, project_id, _phrases_of_row(cursor, project_id, row_id))
     conn.commit()
 
@@ -373,10 +383,16 @@ def delete_translations_by_phrase_pair(project_id, phrase1, phrase2, direction):
     
     # Mark translations as deleted
     placeholders = ','.join('?' * len(row_ids))
-    cursor.execute(
-        f"UPDATE alignments SET deleted_at=CURRENT_TIMESTAMP WHERE row_id IN ({placeholders}) AND project_id=?",
-        row_ids + [project_id]
-    )
+    if has_phrase1 and has_phrase2:
+        why = f'Deleted: contains "{phrase1}" ↔ "{phrase2}"'
+    else:
+        why = f'Deleted: {"source" if has_phrase1 else "target"} contains "{phrase1 if has_phrase1 else phrase2}"'
+    with changelog.batch(project_id, "delete", why):
+        changelog.record_many(row_ids)
+        cursor.execute(
+            f"UPDATE alignments SET deleted_at=CURRENT_TIMESTAMP WHERE row_id IN ({placeholders}) AND project_id=?",
+            row_ids + [project_id]
+        )
     print(f"Marked {len(row_ids)} alignments as deleted")
     
     # Delete occurrences entries for these row_ids

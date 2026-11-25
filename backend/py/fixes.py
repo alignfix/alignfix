@@ -12,6 +12,7 @@ from projects import search_translations
 from utils import find_all_sublists
 from db import get_db
 import progress
+import changelog
 
 def update_row(project_id, row_id, updates):
     _, cursor = get_db()
@@ -19,6 +20,7 @@ def update_row(project_id, row_id, updates):
     set_clause = ', '.join([f"{key} = ?" for key in updates.keys()])
     values = list(updates.values()) + [project_id, row_id]
 
+    changelog.record(row_id)   # text before the change, if a change batch is open
     query = f"UPDATE alignments SET {set_clause} WHERE project_id = ? AND row_id = ?"
     cursor.execute(query, values)
 
@@ -277,6 +279,7 @@ async def apply_directed_fixes(
 
         fix = tokenise(fix, as_string=True)
         fix_tokens = fix.split()
+        changelog.set_reason(changelog.describe_fix(fix_obj), action="edit")
 
         print(f"🎯 Applying fix: '{fix}' ({len(fix_tokens)} tokens)")
 
@@ -457,6 +460,25 @@ async def apply_directed_fixes(
 
     return True
 
+async def _apply_all(project_id, replacement_fixes, duplication_fixes, ranges):
+    duplicated_rows = set()
+    # Apply duplication fixes first (both directions together to avoid double duplication)
+    if duplication_fixes:
+        with progress.stage(*ranges["augment"], f"Duplicating sentences ({len(duplication_fixes)} augmentations)"):
+            duplicated_rows = await apply_duplication_fixes(project_id, duplication_fixes)
+
+    # Apply replacement fixes by direction
+    if replacement_fixes:
+        print(f"📋 Applying {len(replacement_fixes)} replacement fixes, forward direction")
+        with progress.stage(*ranges["forward"], "Replacing in target sentences"):
+            await apply_directed_fixes(project_id, replacement_fixes, fix_direction=1)
+
+        print(f"📋 Applying {len(replacement_fixes)} replacement fixes, reverse direction")
+        with progress.stage(*ranges["reverse"], "Replacing in source sentences"):
+            await apply_directed_fixes(project_id, replacement_fixes, fix_direction=-1)
+    return duplicated_rows
+
+
 async def apply_fixes(project_id, fixes):
     start_time = time.time()
 
@@ -480,21 +502,8 @@ async def apply_fixes(project_id, fixes):
 
     # Track duplicated rows to avoid duplicating them twice
     duplicated_rows = set()
-
-    # Apply duplication fixes first (both directions together to avoid double duplication)
-    if duplication_fixes:
-        with progress.stage(*ranges["augment"], f"Duplicating sentences ({len(duplication_fixes)} augmentations)"):
-            duplicated_rows = await apply_duplication_fixes(project_id, duplication_fixes)
-
-    # Apply replacement fixes by direction
-    if replacement_fixes:
-        print(f"📋 Applying {len(replacement_fixes)} replacement fixes, forward direction")
-        with progress.stage(*ranges["forward"], "Replacing in target sentences"):
-            await apply_directed_fixes(project_id, replacement_fixes, fix_direction=1)
-
-        print(f"📋 Applying {len(replacement_fixes)} replacement fixes, reverse direction")
-        with progress.stage(*ranges["reverse"], "Replacing in source sentences"):
-            await apply_directed_fixes(project_id, replacement_fixes, fix_direction=-1)
+    with changelog.batch(project_id, "edit", "Find & fix"):
+        duplicated_rows = await _apply_all(project_id, replacement_fixes, duplication_fixes, ranges)
 
     if fixes:
         with progress.stage(0.95, 1.0, "Saving fixes"):
@@ -606,6 +615,7 @@ async def apply_duplication_fixes(project_id, fixes):
 
         total_duplications += len(res)
 
+        changelog.set_reason(changelog.describe_fix(fix_obj), action="add")
         # Duplicate each matching row
         for doc_idx, doc in enumerate(res):
             await progress.checkpoint(
@@ -655,6 +665,7 @@ async def apply_duplication_fixes(project_id, fixes):
                 VALUES (?, ?, ?, ?, ?, ?)
             """, (new_row_id, project_id, new_line1, new_line2, alignment_to_string(new_alignment), 0))
             
+            changelog.record(new_row_id, origin_row=row_id)
             new_row_ids.append(new_row_id)
             duplicated_rows.add(row_id)
 

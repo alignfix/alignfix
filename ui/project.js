@@ -19,7 +19,7 @@ import { fetchTranslations, storeTranslation, deleteTranslation, deleteTranslati
 import { applyFixes } from "../backend/js/fixes.js";
 import { getProject, saveProject, downloadProject, mergeProjectStats } from "../backend/js/projects.js";
 import { recomputeAlignments } from "../backend/js/aligner.js";
-import { bindAsyncButton, escapeHtml, reportError } from "./utils.js";
+import { bindAsyncButton, escapeHtml, reportError, formatCount } from "./utils.js";
 import { profiler } from "./profiler.js";
 import { runActivity, stage } from "./activity.js";
 import { showAlert, showDeleteConfirm, toast } from "./dialogs.js";
@@ -60,6 +60,78 @@ function getTextSize() {
   return Math.min(200, Math.max(80, pct));
 }
 
+/** Ask for the sizes of dev and test, then download the corpus with the split. */
+async function openSplitDialog(id) {
+  const project = await getProject(id).catch(() => null);
+  let pairs = 0;
+  try { pairs = Number((typeof project.stats === "string" ? JSON.parse(project.stats) : project.stats)?.corpus_size) || 0; } catch (e) { /* unknown */ }
+  const suggested = pairs ? Math.max(1, Math.min(2000, Math.round(pairs * 0.05))) : 1000;
+  document.getElementById("split-modal")?.remove();
+  document.body.insertAdjacentHTML("beforeend", `
+    <div class="modal fade" id="split-modal" tabindex="-1" aria-labelledby="split-modal-title" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered">
+        <form class="modal-content" id="split-form" novalidate>
+          <div class="modal-header">
+            <h5 class="modal-title" id="split-modal-title"><i class="fas fa-scissors me-2 text-primary"></i>Download with a split</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <p class="small text-muted">The zip gets <code>split/train</code>, <code>dev</code> and <code>test</code> files besides the
+              usual ones. Pairs that share a source or a target sentence always go to the same part, so no sentence
+              is in two parts (case, spacing and punctuation are ignored when comparing).</p>
+            <div class="row g-3">
+              <div class="col-4">
+                <label class="form-label" for="split-dev">Dev pairs</label>
+                <input type="number" class="form-control" id="split-dev" min="0" step="1" value="${suggested}" required>
+              </div>
+              <div class="col-4">
+                <label class="form-label" for="split-test">Test pairs</label>
+                <input type="number" class="form-control" id="split-test" min="0" step="1" value="${suggested}" required>
+              </div>
+              <div class="col-4">
+                <label class="form-label" for="split-seed">Seed</label>
+                <input type="number" class="form-control" id="split-seed" min="1" step="1" value="1" required>
+              </div>
+            </div>
+            <div class="form-text mt-2">The same seed gives the same split. The rest of the pairs is train${pairs ? ` (about ${pairs.toLocaleString()} pairs in all)` : ""}.</div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+            <button type="submit" class="btn btn-primary" id="split-download"><i class="fas fa-download me-1"></i>Download</button>
+          </div>
+        </form>
+      </div>
+    </div>`);
+  const el = document.getElementById("split-modal");
+  const modal = new bootstrap.Modal(el);
+  el.addEventListener("hidden.bs.modal", () => { modal.dispose(); el.remove(); });
+  document.getElementById("split-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const dev = parseInt(document.getElementById("split-dev").value, 10);
+    const test = parseInt(document.getElementById("split-test").value, 10);
+    const seed = parseInt(document.getElementById("split-seed").value, 10);
+    if (!(dev >= 0) || !(test >= 0) || !(seed >= 1) || dev + test === 0) {
+      e.target.classList.add("was-validated");
+      toast("Give the number of dev and test pairs (at least one of them above 0) and a seed of 1 or more.", "warning");
+      return;
+    }
+    const btn = document.getElementById("split-download");
+    btn.disabled = true;
+    btn.innerHTML = `<span class="spinner-border spinner-border-sm me-1"></span>Preparing…`;
+    try {
+      const summary = await downloadProject(id, { devSize: dev, testSize: test, seed });
+      const s = summary.split || {};
+      toast(`Downloaded: train ${formatCount(s.train || 0)}, dev ${formatCount(s.dev || 0)}, test ${formatCount(s.test || 0)} pairs.`, "success");
+      modal.hide();
+    } catch (err) {
+      reportError(err);
+      btn.disabled = false;
+      btn.innerHTML = `<i class="fas fa-download me-1"></i>Download`;
+    }
+  });
+  modal.show();
+}
+
 export async function renderProject(id, params = new URLSearchParams()) {
   const app = document.getElementById("app");
 
@@ -92,9 +164,19 @@ export async function renderProject(id, params = new URLSearchParams()) {
       <button id="apply-fixes-btn" class="btn btn-success" type="button" title="Apply the pending edits to the corpus">
         <i class="fas fa-check-double"></i> Apply edits
       </button>
-      <button id="download-btn" class="btn btn-outline-secondary" type="button" title="Download sentences, alignments and fixes as .zip">
-        <i class="fas fa-download"></i> Download
-      </button>
+      <div class="btn-group">
+        <button id="download-btn" class="btn btn-outline-secondary" type="button"
+                title="Download the corpus as .zip: sentences, alignments, change report and line origins">
+          <i class="fas fa-download"></i> Download
+        </button>
+        <button type="button" class="btn btn-outline-secondary dropdown-toggle dropdown-toggle-split"
+                data-bs-toggle="dropdown" aria-expanded="false" aria-label="More download options"></button>
+        <ul class="dropdown-menu dropdown-menu-end">
+          <li><button class="dropdown-item" type="button" id="download-split-btn">
+            <i class="fas fa-scissors fa-fw me-1"></i>With train / dev / test split…</button></li>
+          <li><a class="dropdown-item" href="#stats-${id}"><i class="fas fa-file-archive fa-fw me-1"></i>Whole project (.algf)…</a></li>
+        </ul>
+      </div>
     </div>
   </div>
   <div class="row">
@@ -491,11 +573,10 @@ export async function renderProject(id, params = new URLSearchParams()) {
   );
 
   bindAsyncButton(
-    document.getElementById("download-btn"), 
-    () => {
-      downloadProject(id)
-    }
+    document.getElementById("download-btn"),
+    () => downloadProject(id).catch(reportError)
   );
+  document.getElementById("download-split-btn").addEventListener("click", () => openSplitDialog(id));
 
   bindAsyncButton(
     document.getElementById("download-ignored-btn"), 
